@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Context } from 'telegraf';
 import { SummaryChannelFlow } from '../../modules/summary-channel/summary-channel.flow';
+import { SUMMARY_CHANNEL_NAMESPACE } from '../../modules/summary-channel/summary-channel.callbacks';
 
 @Injectable()
 export class CallbackRouter {
@@ -22,7 +23,7 @@ export class CallbackRouter {
       return;
     }
 
-    if (data.startsWith('summary:channel:')) {
+    if (data.startsWith(`${SUMMARY_CHANNEL_NAMESPACE}:`)) {
       return this.summaryChannelFlow.handleCallback(ctx, data);
     }
   }

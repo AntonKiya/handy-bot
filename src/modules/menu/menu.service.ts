@@ -1,27 +1,24 @@
 import { Injectable } from '@nestjs/common';
-import { Context, Markup } from 'telegraf';
-import * as path from 'path';
+import { Context } from 'telegraf';
+import { buildMainMenuKeyboard } from './menu.keyboard';
 
 @Injectable()
 export class MenuService {
+  private readonly mainMenuText = 'Главное меню 🙋‍♂️';
+
   async showMainMenu(ctx: Context) {
-    const caption = 'Главное меню';
+    const keyboard = buildMainMenuKeyboard();
 
-    const imagePath = path.join(
-      __dirname,
-      '../../../assets/images/main-menu.png',
-    );
+    await ctx.reply(this.mainMenuText, {
+      ...keyboard,
+    });
+  }
 
-    const keyboard = Markup.inlineKeyboard([
-      [Markup.button.callback('Саммари каналов 📝🎯', 'summary:channel:open')],
-    ]);
+  async redrawMainMenu(ctx: Context) {
+    const keyboard = buildMainMenuKeyboard();
 
-    await ctx.replyWithPhoto(
-      { source: imagePath },
-      {
-        caption,
-        ...keyboard,
-      },
-    );
+    await ctx.editMessageText(this.mainMenuText, {
+      ...keyboard,
+    });
   }
 }
