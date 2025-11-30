@@ -4,6 +4,10 @@ import {
   UserState,
   UserStateService,
 } from '../../common/state/user-state.service';
+import {
+  SummaryChannelAiService,
+  SummaryInputMap,
+} from './summary-channel-ai.service';
 
 export type SummaryChannelStateResult =
   | { type: 'none' }
@@ -21,7 +25,10 @@ export class SummaryChannelService {
 
   private readonly channelsByUser = new Map<number, string[]>();
 
-  constructor(private readonly userStateService: UserStateService) {}
+  constructor(
+    private readonly userStateService: UserStateService,
+    private readonly summaryChannelAiService: SummaryChannelAiService,
+  ) {}
 
   /**
    * Старт сценария "добавить канал".
@@ -210,5 +217,51 @@ export class SummaryChannelService {
     );
 
     return result;
+  }
+
+  /**
+   * Хелпер для доменного уровня:
+   * 1) Парсит посты за окно времени;
+   * 2) Кормит их в LLM;
+   * 3) Возвращает массив с id и summary.
+   */
+  async getRecentPostSummariesForChannel(
+    channelNameWithAt: string,
+  ): Promise<{ id: number; summary: string }[]> {
+    const posts = await this.fetchRecentTextPostsForChannel(channelNameWithAt);
+
+    if (!posts.length) {
+      this.logger.debug(
+        `No recent posts found for channel ${channelNameWithAt}`,
+      );
+      return [];
+    }
+
+    const inputMap: SummaryInputMap = {};
+    for (const p of posts) {
+      inputMap[String(p.id)] = p.text;
+    }
+
+    let summariesMap: Record<string, string> = {};
+    try {
+      summariesMap =
+        await this.summaryChannelAiService.summarizePosts(inputMap);
+    } catch (e) {
+      this.logger.error(
+        `Failed to summarize posts for channel ${channelNameWithAt}, fallback to raw text snippets`,
+        e as any,
+      );
+      // На случай ошибки LLM возвращаем первые слова оригинала
+      return posts.map((p) => ({
+        id: p.id,
+        summary: p.text.slice(0, 120),
+      }));
+    }
+
+    return posts.map((p) => {
+      const key = String(p.id);
+      const summary = summariesMap[key] ?? p.text.slice(0, 120);
+      return { id: p.id, summary };
+    });
   }
 }

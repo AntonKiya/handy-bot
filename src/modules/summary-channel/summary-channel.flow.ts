@@ -44,61 +44,8 @@ export class SummaryChannelFlow {
         channels: result.channels,
       });
 
-      const chatId = ctx.chat?.id;
-      const channelName = result.newChannel;
-      const telegram = ctx.telegram;
-
-      if (!chatId) {
-        this.logger.warn(
-          `No chatId for user ${userId} when scheduling posts preview`,
-        );
-        return;
-      }
-
-      const DELAY_MS = 3000;
-
-      setTimeout(async () => {
-        try {
-          this.logger.debug(
-            `Fetching recent posts for channel ${channelName} to show preview to user ${userId}`,
-          );
-
-          const posts =
-            await this.summaryChannelService.fetchRecentTextPostsForChannel(
-              channelName,
-            );
-
-          if (!posts.length) {
-            await telegram.sendMessage(
-              chatId,
-              'За последние 5 часов текстовых постов не найдено.',
-            );
-            return;
-          }
-
-          const lines = posts.map(
-            (p) => `${p.id}: ${this.buildPreview(p.text)}`,
-          );
-
-          const message = lines.join('\n');
-
-          await telegram.sendMessage(chatId, message);
-        } catch (err) {
-          this.logger.error(
-            `Failed to fetch or send posts preview for channel ${channelName}`,
-            err as Error,
-          );
-        }
-      }, DELAY_MS);
+      await this.sendChannelSummaries(ctx, result.newChannel);
     }
-  }
-
-  private buildPreview(text: string, maxWords = 6): string {
-    const words = text.split(/\s+/).filter(Boolean);
-    if (words.length <= maxWords) {
-      return text;
-    }
-    return words.slice(0, maxWords).join(' ') + '…';
   }
 
   /**
@@ -285,6 +232,45 @@ export class SummaryChannelFlow {
 
     if ('answerCbQuery' in ctx && typeof ctx.answerCbQuery === 'function') {
       await ctx.answerCbQuery();
+    }
+  }
+
+  /**
+   * Вспомогательный метод: запросить саммари для постов канала и отправить в чат в виде:
+   *   12345: краткое саммари поста...
+   */
+  private async sendChannelSummaries(ctx: Context, channelNameWithAt: string) {
+    const userId = ctx.from?.id;
+    this.logger.debug(
+      `Fetching summaries for channel ${channelNameWithAt} for user ${userId}`,
+    );
+
+    try {
+      const summaries =
+        await this.summaryChannelService.getRecentPostSummariesForChannel(
+          channelNameWithAt,
+        );
+
+      if (!summaries.length) {
+        await ctx.reply(
+          `There are no suitable text posts in the ${channelNameWithAt} channel for the recent period.`,
+        );
+        return;
+      }
+
+      const lines = summaries.map((item) => `${item.id}: ${item.summary}`);
+
+      const messageText = lines.join('\n\n');
+
+      await ctx.reply(messageText);
+    } catch (e) {
+      this.logger.error(
+        `Failed to send summaries for channel ${channelNameWithAt}`,
+        e as any,
+      );
+      await ctx.reply(
+        `Failed to retrieve post summaries for ${channelNameWithAt}. Please try again later.`,
+      );
     }
   }
 }
