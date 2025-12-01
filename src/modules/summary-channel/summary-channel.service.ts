@@ -117,14 +117,14 @@ export class SummaryChannelService {
   async fetchRecentTextPostsForChannel(
     channelNameWithAt: string,
   ): Promise<ParsedChannelPost[]> {
-    const HOURS_WINDOW = 5;
+    const HOURS_WINDOW = 336;
     const cutoff = Date.now() - HOURS_WINDOW * 60 * 60 * 1000;
 
     const channelSlug = channelNameWithAt.replace(/^@/, '');
     let before: number | undefined;
     const result: ParsedChannelPost[] = [];
 
-    const MAX_PAGES = 5;
+    const MAX_PAGES = 20;
     let page = 0;
 
     while (page < MAX_PAGES) {

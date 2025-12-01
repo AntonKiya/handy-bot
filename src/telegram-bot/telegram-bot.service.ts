@@ -15,7 +15,7 @@ export class TelegramBotService implements OnModuleInit {
     private readonly callbackRouter: CallbackRouter,
   ) {}
 
-  onModuleInit() {
+  async onModuleInit() {
     const token = process.env.BOT_TOKEN;
     if (!token) {
       this.logger.error('BOT_TOKEN is not set');
@@ -24,7 +24,16 @@ export class TelegramBotService implements OnModuleInit {
 
     this.bot = new Telegraf<Context>(token);
 
-    // Команды
+    // Команды в нативном Menu
+    await this.bot.telegram.setMyCommands([
+      { command: 'start', description: 'Запустить бота' },
+    ]);
+
+    await this.bot.telegram.setChatMenuButton({
+      menuButton: { type: 'commands' },
+    });
+
+    // Поддерживаемые команды
     this.bot.command('start', (ctx) => this.commandRouter.route(ctx));
 
     // Централизованный текстовый обработчик
