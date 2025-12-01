@@ -28,7 +28,8 @@
     "cheerio": "^1.1.0",
     "reflect-metadata": "^0.2.0",
     "rxjs": "^7.8.1",
-    "telegraf": "^4.16.3"
+    "telegraf": "^4.16.3",
+    "telegram": "^2.26.22"
   },
   "devDependencies": {
     "@nestjs/cli": "^10.0.0",

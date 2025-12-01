@@ -2,12 +2,17 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Context } from 'telegraf';
 import { SummaryChannelFlow } from '../../modules/summary-channel/summary-channel.flow';
 import { SUMMARY_CHANNEL_NAMESPACE } from '../../modules/summary-channel/summary-channel.callbacks';
+import { SummaryCommentsFlow } from '../../modules/summary-comments/summary-comments.flow';
+import { SUMMARY_COMMENTS_NAMESPACE } from '../../modules/summary-comments/summary-comments.callbacks';
 
 @Injectable()
 export class CallbackRouter {
   private readonly logger = new Logger(CallbackRouter.name);
 
-  constructor(private readonly summaryChannelFlow: SummaryChannelFlow) {}
+  constructor(
+    private readonly summaryChannelFlow: SummaryChannelFlow,
+    private readonly summaryCommentsFlow: SummaryCommentsFlow,
+  ) {}
 
   async route(ctx: Context) {
     const data =
@@ -25,6 +30,10 @@ export class CallbackRouter {
 
     if (data.startsWith(`${SUMMARY_CHANNEL_NAMESPACE}:`)) {
       return this.summaryChannelFlow.handleCallback(ctx, data);
+    }
+
+    if (data.startsWith(`${SUMMARY_COMMENTS_NAMESPACE}:`)) {
+      return this.summaryCommentsFlow.handleCallback(ctx, data);
     }
   }
 }

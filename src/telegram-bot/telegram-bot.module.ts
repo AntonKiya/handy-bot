@@ -5,17 +5,16 @@ import { TextRouter } from './routers/text.router';
 import { CallbackRouter } from './routers/callback.router';
 import { MenuModule } from '../modules/menu/menu.module';
 import { SummaryChannelModule } from '../modules/summary-channel/summary-channel.module';
+import { SummaryCommentsModule } from '../modules/summary-comments/summary-comments.module';
 import { StateModule } from '../common/state/state.module';
-import { AiModule } from '../ai/ai.module';
 
 @Module({
-  imports: [MenuModule, SummaryChannelModule, StateModule],
-  providers: [
-    TelegramBotService,
-    CommandRouter,
-    TextRouter,
-    CallbackRouter,
-    AiModule,
+  imports: [
+    MenuModule,
+    StateModule,
+    SummaryChannelModule,
+    SummaryCommentsModule,
   ],
+  providers: [TelegramBotService, CommandRouter, TextRouter, CallbackRouter],
 })
-export class TelegramModule {}
+export class TelegramBotModule {}
