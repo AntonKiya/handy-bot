@@ -203,11 +203,6 @@ export class SummaryChannelFlow {
    * Позже здесь будем звать MenuService и возвращать основное меню.
    */
   private async handleBackToMainMenu(ctx: Context) {
-    const userId = ctx.from?.id;
-    this.logger.debug(
-      `SummaryChannel: back to main menu requested by user ${userId}`,
-    );
-
     await this.menuService.redrawMainMenu(ctx);
 
     if ('answerCbQuery' in ctx && typeof ctx.answerCbQuery === 'function') {

@@ -152,4 +152,23 @@ export class UserChannelsService {
       },
     };
   }
+
+  async getChannelsForUser(telegramUserId: number): Promise<string[]> {
+    const user = await this.userRepository.findOne({
+      where: { telegram_user_id: telegramUserId },
+    });
+
+    if (!user) {
+      return [];
+    }
+
+    const userChannels = await this.userChannelRepository.find({
+      where: { user: { id: user.id } },
+      relations: ['channel'],
+    });
+
+    return userChannels.map((uc) => {
+      return String(uc.channel.telegram_chat_id);
+    });
+  }
 }

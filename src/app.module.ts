@@ -10,6 +10,8 @@ import { MenuModule } from './modules/menu/menu.module';
 import { UserModule } from './modules/user/user.module';
 import { ChannelModule } from './modules/channel/channel.module';
 import { UserChannelsModule } from './modules/user-channels/user-channels.module';
+import { ChannelPostsModule } from './modules/channel-posts/channel-posts.module';
+import { CoreChannelUsersModule } from './modules/core-channel-users/core-channel-users.module';
 import { TelegramCoreModule } from './telegram-core/telegram-core.module';
 
 @Module({
@@ -52,6 +54,8 @@ import { TelegramCoreModule } from './telegram-core/telegram-core.module';
     UserModule,
     ChannelModule,
     UserChannelsModule,
+    ChannelPostsModule,
+    CoreChannelUsersModule,
   ],
 })
 export class AppModule {}
