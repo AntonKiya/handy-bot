@@ -118,7 +118,17 @@ export class UserChannelsFlowService {
     if (!channels.length) {
       text = 'У вас пока нет подключённых каналов.';
     } else {
-      text = 'Ваши каналы:\n\n' + channels.map((c) => `• ${c}`).join('\n');
+      text =
+        'Ваши каналы:\n\n' +
+        channels
+          .map((ch) => {
+            // Отображаем username если есть, иначе ID
+            const displayName = ch.username
+              ? `@${ch.username}`
+              : `ID: ${ch.telegramChatId}`;
+            return `• ${displayName}`;
+          })
+          .join('\n');
     }
 
     const keyboard = Markup.inlineKeyboard([

@@ -63,13 +63,13 @@ export class CoreChannelUsersFlow {
       `CoreChannelUsers: showChannelSelectMenu for user ${telegramUserId}`,
     );
 
-    const channelIds =
+    const channels =
       await this.userChannelsService.getChannelsForUser(telegramUserId);
 
     let text: string;
     let keyboard;
 
-    if (!channelIds.length) {
+    if (!channels.length) {
       text =
         'У вас пока нет подключённых каналов.\n\n' +
         'Добавьте бота как администратора в канал, чтобы он появился в списке.';
@@ -85,14 +85,26 @@ export class CoreChannelUsersFlow {
     } else {
       text =
         'Выберите канал, для которого нужно сформировать отчёт по ядру комментаторов:\n\n' +
-        channelIds.map((id) => `• ID: ${id}`).join('\n');
+        channels
+          .map((ch) => {
+            const displayName = ch.username
+              ? `@${ch.username}`
+              : `ID: ${ch.telegramChatId}`;
+            return `• ${displayName}`;
+          })
+          .join('\n');
 
-      const buttons = channelIds.map((id) => [
-        Markup.button.callback(
-          `ID: ${id}`,
-          `${CORE_CHANNEL_USERS_NAMESPACE}:${CoreChannelUsersAction.Select}:${id}`,
-        ),
-      ]);
+      const buttons = channels.map((ch) => {
+        const displayName = ch.username
+          ? `@${ch.username}`
+          : `ID: ${ch.telegramChatId}`;
+        return [
+          Markup.button.callback(
+            displayName,
+            `${CORE_CHANNEL_USERS_NAMESPACE}:${CoreChannelUsersAction.Select}:${ch.telegramChatId}`,
+          ),
+        ];
+      });
 
       buttons.push([
         Markup.button.callback(
@@ -193,8 +205,14 @@ export class CoreChannelUsersFlow {
       items.forEach((item, idx) => {
         const avg = item.avgCommentsPerActivePost.toFixed(2);
 
-        // TODO: подставить username или имя когда начнем хранить
-        const userLabel = `telegram_id=${item.telegramUserId}`;
+        // Отображаем username если есть, иначе ID
+        // TODO: Учесть возможное изменение имени.
+        // Если пользователь изменит свой username в Telegram после последней синхронизации,
+        // в отчёте будет отображаться старый username до следующей синхронизации комментариев этого пользователя.
+        // Также если username был удалён пользователем, мы продолжим показывать старый username.
+        const userLabel = item.username
+          ? `@${item.username}`
+          : `ID: ${item.telegramUserId}`;
 
         lines.push(
           `${idx + 1}. ${userLabel} — ${item.commentsCount} комментариев ` +
