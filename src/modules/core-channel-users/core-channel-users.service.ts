@@ -24,6 +24,7 @@ import {
 
 export interface CoreUserReportItem {
   telegramUserId: number;
+  username: string | null;
   commentsCount: number;
   postsCount: number;
   avgCommentsPerActivePost: number;
@@ -168,7 +169,7 @@ export class CoreChannelUsersService {
       return { synced: false };
     }
 
-    // роверяем username ДО начала синка и обновления lastSyncedAt
+    // Проверяем username ДО начала синка и обновления lastSyncedAt
     if (!channel.username) {
       this.logger.warn(
         `syncChannel: channel ${channel.id} has no username, cannot sync`,
@@ -566,6 +567,7 @@ export class CoreChannelUsersService {
       const authorsToUpsert = new Map<number, CoreCommentAuthorType>();
       const commentsData: Array<{
         authorTelegramId: number;
+        authorUsername: string | null;
         authorType: CoreCommentAuthorType;
         telegramCommentId: number;
         commentedAt: Date;
@@ -599,6 +601,7 @@ export class CoreChannelUsersService {
 
         // Определяем автора комментария по fromId:
         let authorTelegramId: number | undefined;
+        let authorUsername: string | null = null;
         let authorType: CoreCommentAuthorType;
 
         const fromId = r.fromId;
@@ -606,9 +609,36 @@ export class CoreChannelUsersService {
         if (fromId instanceof Api.PeerUser) {
           authorTelegramId = Number(fromId.userId);
           authorType = 'user';
+
+          // Пытаемся получить username из объекта сообщения
+          // TODO: USERNAME_EXTRACTION - Неполная информация о username
+          // Проблема: В Api.Message может не быть полной информации о пользователе
+          // Решение: Использовать client.getEntity() для получения полной информации о пользователе
+          try {
+            const sender = await r.getSender();
+            if (sender && 'username' in sender) {
+              authorUsername = (sender as any).username ?? null;
+            }
+          } catch (e) {
+            this.logger.debug(
+              `syncCommentsForPost: failed to get sender for comment ${telegramCommentId}`,
+            );
+          }
         } else if (fromId instanceof Api.PeerChannel) {
           authorTelegramId = Number(fromId.channelId);
           authorType = 'channel';
+
+          // Для каналов также пытаемся получить username
+          try {
+            const sender = await r.getSender();
+            if (sender && 'username' in sender) {
+              authorUsername = (sender as any).username ?? null;
+            }
+          } catch (e) {
+            this.logger.debug(
+              `syncCommentsForPost: failed to get sender channel for comment ${telegramCommentId}`,
+            );
+          }
         } else if (fromId instanceof Api.PeerChat) {
           authorTelegramId = Number(fromId.chatId);
           authorType = 'chat';
@@ -634,6 +664,7 @@ export class CoreChannelUsersService {
         authorsToUpsert.set(authorTelegramId, authorType);
         commentsData.push({
           authorTelegramId,
+          authorUsername,
           authorType,
           telegramCommentId,
           commentedAt,
@@ -644,10 +675,15 @@ export class CoreChannelUsersService {
         break;
       }
 
-      // Batch upsert всех авторов
-      const authorsArray = Array.from(authorsToUpsert.keys()).map((id) => ({
-        telegram_user_id: id,
-      }));
+      // Batch upsert всех авторов с username
+      const authorsArray = Array.from(authorsToUpsert.keys()).map((id) => {
+        // Ищем username для этого автора в commentsData
+        const commentData = commentsData.find((c) => c.authorTelegramId === id);
+        return {
+          telegram_user_id: id,
+          username: commentData?.authorUsername ?? null,
+        };
+      });
       await userRepo.upsert(authorsArray, {
         conflictPaths: ['telegram_user_id'],
       });
@@ -759,6 +795,7 @@ export class CoreChannelUsersService {
    * Загружает топ N пользователей по числу комментариев за окно по конкретному каналу.
    * Считает количество постов, в которых пользователь комментировал,
    * и среднее число комментариев на активный пост для этого пользователя.
+   * Возвращает также username пользователя.
    */
   private async loadTopUsersForChannel(
     channel: Channel,
@@ -780,14 +817,17 @@ export class CoreChannelUsersService {
         to: windowTo,
       })
       .select('u.telegram_user_id', 'telegram_user_id')
+      .addSelect('u.username', 'username')
       .addSelect('COUNT(*)', 'comments_count')
       .addSelect('COUNT(DISTINCT c.post_id)', 'posts_count')
       .groupBy('u.telegram_user_id')
+      .addGroupBy('u.username')
       .orderBy('comments_count', 'DESC')
       .limit(TOP_USERS_AMOUNT);
 
     const raw = await qb.getRawMany<{
       telegram_user_id: string;
+      username: string | null;
       comments_count: string;
       posts_count: string;
     }>();
@@ -800,6 +840,7 @@ export class CoreChannelUsersService {
 
       return {
         telegramUserId: Number(row.telegram_user_id),
+        username: row.username,
         commentsCount,
         postsCount,
         avgCommentsPerActivePost: avg,

@@ -26,6 +26,11 @@ export type HandleMyChatMemberResult =
         | 'channel-not-found';
     };
 
+export interface ChannelInfo {
+  telegramChatId: string;
+  username: string | null;
+}
+
 @Injectable()
 export class UserChannelsService {
   private readonly logger = new Logger(UserChannelsService.name);
@@ -80,9 +85,12 @@ export class UserChannelsService {
       return { type: 'skipped', reason: 'actor-not-admin' };
     }
 
-    // 3) Апсерт пользователя
+    // 3) Апсерт пользователя с обновлением username
     await this.userRepository.upsert(
-      { telegram_user_id: actorId },
+      {
+        telegram_user_id: actorId,
+        username: actor?.username ?? null,
+      },
       { conflictPaths: ['telegram_user_id'] },
     );
     const user = await this.userRepository.findOne({
@@ -97,10 +105,10 @@ export class UserChannelsService {
     }
 
     this.logger.debug(
-      `User upserted/retrieved: telegram_user_id=${actorId}, id=${user.id}`,
+      `User upserted/retrieved: telegram_user_id=${actorId}, id=${user.id}, username=${user.username}`,
     );
 
-    // 4) Апсерт канал
+    // 4) Апсерт канала с обновлением username
     await this.channelRepository.upsert(
       {
         telegram_chat_id: chatId,
@@ -120,7 +128,7 @@ export class UserChannelsService {
     }
 
     this.logger.debug(
-      `Channel upserted/retrieved: telegram_chat_id=${chatId}, id=${channel.id}`,
+      `Channel upserted/retrieved: telegram_chat_id=${chatId}, id=${channel.id}, username=${channel.username}`,
     );
 
     // 5) Связь user <-> channel
@@ -156,7 +164,10 @@ export class UserChannelsService {
     };
   }
 
-  async getChannelsForUser(telegramUserId: number): Promise<string[]> {
+  /**
+   * Возвращает список каналов для пользователя с их telegram_chat_id и username.
+   */
+  async getChannelsForUser(telegramUserId: number): Promise<ChannelInfo[]> {
     const user = await this.userRepository.findOne({
       where: { telegram_user_id: telegramUserId },
     });
@@ -170,8 +181,9 @@ export class UserChannelsService {
       relations: ['channel'],
     });
 
-    return userChannels.map((uc) => {
-      return String(uc.channel.telegram_chat_id);
-    });
+    return userChannels.map((uc) => ({
+      telegramChatId: String(uc.channel.telegram_chat_id),
+      username: uc.channel.username,
+    }));
   }
 }
