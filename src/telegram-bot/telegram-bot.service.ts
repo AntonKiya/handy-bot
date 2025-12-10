@@ -1,4 +1,9 @@
-import { Injectable, OnModuleInit, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  OnModuleInit,
+  OnApplicationShutdown,
+  Logger,
+} from '@nestjs/common';
 import { Telegraf, Context } from 'telegraf';
 import { CommandRouter } from './routers/command.router';
 import { TextRouter } from './routers/text.router';
@@ -6,7 +11,7 @@ import { CallbackRouter } from './routers/callback.router';
 import { MembershipRouter } from './routers/membership.router';
 
 @Injectable()
-export class TelegramBotService implements OnModuleInit {
+export class TelegramBotService implements OnModuleInit, OnApplicationShutdown {
   private readonly logger = new Logger(TelegramBotService.name);
   private bot: Telegraf<Context>;
 
@@ -47,7 +52,14 @@ export class TelegramBotService implements OnModuleInit {
     // Централизованный обработчик my_chat_member (добавление бота)
     this.bot.on('my_chat_member', (ctx) => this.membershipRouter.route(ctx));
 
-    await this.bot.launch();
-    this.logger.log('Telegram bot launched');
+    this.bot
+      .launch()
+      .then(() => this.logger.log('Telegram bot successfully launched'))
+      .catch((err) => this.logger.error('Failed to launch bot', err));
+  }
+
+  async onApplicationShutdown(signal?: string) {
+    this.logger.log(`Shutting down Telegram bot (${signal})`);
+    this.bot.stop(signal);
   }
 }

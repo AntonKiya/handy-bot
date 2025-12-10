@@ -13,6 +13,7 @@ import { UserChannelsModule } from './modules/user-channels/user-channels.module
 import { ChannelPostsModule } from './modules/channel-posts/channel-posts.module';
 import { CoreChannelUsersModule } from './modules/core-channel-users/core-channel-users.module';
 import { TelegramCoreModule } from './telegram-core/telegram-core.module';
+import { HealthcheckModule } from './healthcheck/healthcheck.module';
 
 @Module({
   imports: [
@@ -60,6 +61,7 @@ import { TelegramCoreModule } from './telegram-core/telegram-core.module';
     UserChannelsModule,
     ChannelPostsModule,
     CoreChannelUsersModule,
+    HealthcheckModule,
   ],
 })
 export class AppModule {}
