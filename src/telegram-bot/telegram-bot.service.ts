@@ -15,6 +15,9 @@ export class TelegramBotService implements OnModuleInit, OnApplicationShutdown {
   private readonly logger = new Logger(TelegramBotService.name);
   private bot: Telegraf<Context>;
 
+  private externalGroupMessageHandler: ((ctx: Context) => void) | null = null;
+  private externalChannelPostHandler: ((ctx: Context) => void) | null = null;
+
   constructor(
     private readonly commandRouter: CommandRouter,
     private readonly textRouter: TextRouter,
@@ -44,13 +47,34 @@ export class TelegramBotService implements OnModuleInit, OnApplicationShutdown {
     this.bot.command('start', (ctx) => this.commandRouter.route(ctx));
 
     // Централизованный текстовый обработчик
-    this.bot.on('text', (ctx) => this.textRouter.route(ctx));
+    this.bot.on('text', (ctx) => {
+      this.textRouter.route(ctx);
+
+      // ДОБАВЛЕНО: вызываем внешний обработчик для групповых сообщений
+      if (this.externalGroupMessageHandler) {
+        this.externalGroupMessageHandler(ctx);
+      }
+    });
 
     // Централизованный обработчик callback_query (кнопки)
     this.bot.on('callback_query', (ctx) => this.callbackRouter.route(ctx));
 
     // Централизованный обработчик my_chat_member (добавление бота)
     this.bot.on('my_chat_member', (ctx) => this.membershipRouter.route(ctx));
+
+    // ДОБАВЛЕНО: обработчик постов в каналах
+    this.bot.on('channel_post', (ctx) => {
+      if (this.externalChannelPostHandler) {
+        this.externalChannelPostHandler(ctx);
+      }
+    });
+
+    // ДОБАВЛЕНО: обработчик редактирования постов в каналах (опционально)
+    this.bot.on('edited_channel_post', (ctx) => {
+      if (this.externalChannelPostHandler) {
+        this.externalChannelPostHandler(ctx);
+      }
+    });
 
     this.bot
       .launch()
@@ -61,5 +85,21 @@ export class TelegramBotService implements OnModuleInit, OnApplicationShutdown {
   async onApplicationShutdown(signal?: string) {
     this.logger.log(`Shutting down Telegram bot (${signal})`);
     this.bot.stop(signal);
+  }
+
+  /**
+   * ДОБАВЛЕНО: Регистрация внешнего обработчика для групповых сообщений
+   */
+  registerGroupMessageHandler(handler: (ctx: Context) => void) {
+    this.externalGroupMessageHandler = handler;
+    this.logger.log('External group message handler registered');
+  }
+
+  /**
+   * ДОБАВЛЕНО: Регистрация внешнего обработчика для постов каналов
+   */
+  registerChannelPostHandler(handler: (ctx: Context) => void) {
+    this.externalChannelPostHandler = handler;
+    this.logger.log('External channel post handler registered');
   }
 }

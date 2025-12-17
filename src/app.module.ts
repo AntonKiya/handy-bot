@@ -14,6 +14,7 @@ import { ChannelPostsModule } from './modules/channel-posts/channel-posts.module
 import { CoreChannelUsersModule } from './modules/core-channel-users/core-channel-users.module';
 import { TelegramCoreModule } from './telegram-core/telegram-core.module';
 import { HealthcheckModule } from './healthcheck/healthcheck.module';
+import { TestAggregatorModule } from './modules/test-aggregator/test-aggregator.module';
 
 @Module({
   imports: [
@@ -62,6 +63,7 @@ import { HealthcheckModule } from './healthcheck/healthcheck.module';
     ChannelPostsModule,
     CoreChannelUsersModule,
     HealthcheckModule,
+    TestAggregatorModule,
   ],
 })
 export class AppModule {}
