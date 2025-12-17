@@ -30,6 +30,9 @@ const TEST_USER_ID_BASE = 1000;
 const TEST_COMMENT_ID_BASE = 600;
 const TEST_OLD_USER_ID_BASE = 9000;
 
+const telegramChatId = -1001234567890;
+const channelUsername = 'core_users_test_channel';
+
 // ----- Мок клиента Telegram (работает поверх простого сценария постов/комментов) -----
 
 class FakeTelegramClient {
@@ -40,7 +43,7 @@ class FakeTelegramClient {
     if (!scenario) {
       throw new Error(`Unknown channel username: ${username}`);
     }
-    return { username };
+    return { id: telegramChatId, username };
   }
 
   async getMessages(channel: any, options: any) {
@@ -129,9 +132,6 @@ describe('CoreChannelUsersService (integration)', () => {
   let channelSyncRepo: Repository<CoreChannelUsersChannelSync>;
   let userRepo: Repository<User>;
   let telegramCoreService: TelegramCoreServiceMock;
-
-  const telegramChatId = -1001234567890;
-  const channelUsername = 'core_users_test_channel';
 
   const setTelegramScenario = (scenario: any) => {
     const client = new FakeTelegramClient({
