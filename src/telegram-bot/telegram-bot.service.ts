@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { Telegraf, Context } from 'telegraf';
 import { CommandRouter } from './routers/command.router';
-import { TextRouter } from './routers/text.router';
+import { MessageRouter } from './routers/message.router';
 import { CallbackRouter } from './routers/callback.router';
 import { MembershipRouter } from './routers/membership.router';
 
@@ -17,7 +17,7 @@ export class TelegramBotService implements OnModuleInit, OnApplicationShutdown {
 
   constructor(
     private readonly commandRouter: CommandRouter,
-    private readonly textRouter: TextRouter,
+    private readonly messageRouter: MessageRouter,
     private readonly callbackRouter: CallbackRouter,
     private readonly membershipRouter: MembershipRouter,
   ) {}
@@ -44,7 +44,9 @@ export class TelegramBotService implements OnModuleInit, OnApplicationShutdown {
     this.bot.command('start', (ctx) => this.commandRouter.route(ctx));
 
     // Централизованный текстовый обработчик
-    this.bot.on('text', (ctx) => this.textRouter.route(ctx));
+    this.bot.on('text', (ctx) => this.messageRouter.route(ctx));
+
+    this.bot.on('message', (ctx) => this.messageRouter.route(ctx));
 
     // Централизованный обработчик callback_query (кнопки)
     this.bot.on('callback_query', (ctx) => this.callbackRouter.route(ctx));
