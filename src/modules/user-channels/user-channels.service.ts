@@ -186,4 +186,28 @@ export class UserChannelsService {
       username: uc.channel.username,
     }));
   }
+
+  async getChannelAdminsByTelegramChatId(
+    telegramChatId: number,
+  ): Promise<number[]> {
+    const channel = await this.channelRepository.findOne({
+      where: { telegram_chat_id: telegramChatId },
+    });
+
+    if (!channel) {
+      return [];
+    }
+
+    const userChannels = await this.userChannelRepository.find({
+      where: {
+        channel: { id: channel.id },
+        is_admin: true,
+      },
+      relations: ['user'],
+    });
+
+    return userChannels
+      .map((uc) => uc.user.telegram_user_id)
+      .filter((id) => id != null);
+  }
 }

@@ -1,0 +1,40 @@
+import { Module } from '@nestjs/common';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { ImportantMessage } from './important-message.entity';
+import { DictionaryWord } from './dictionary-word.entity';
+import { Channel } from '../channel/channel.entity';
+import { DictionaryService } from './dictionary.service';
+import { CategorizationService } from './categorization.service';
+import { ImportantMessagesService } from './important-messages.service';
+import { ImportantMessagesFlow } from './important-messages.flow';
+import { QuestionScorer } from './utils/scorers/question.scorer';
+import { LeadScorer } from './utils/scorers/lead.scorer';
+import { NegativeScorer } from './utils/scorers/negative.scorer';
+import { HypeScorer } from './utils/scorers/hype.scorer';
+import { UserChannelsModule } from '../user-channels/user-channels.module';
+import { ChannelModule } from '../channel/channel.module';
+
+@Module({
+  imports: [
+    TypeOrmModule.forFeature([ImportantMessage, DictionaryWord, Channel]),
+    UserChannelsModule,
+    ChannelModule,
+  ],
+  providers: [
+    // Services
+    DictionaryService,
+    CategorizationService,
+    ImportantMessagesService,
+
+    // Flow
+    ImportantMessagesFlow,
+
+    // Scorers
+    QuestionScorer,
+    LeadScorer,
+    NegativeScorer,
+    HypeScorer,
+  ],
+  exports: [ImportantMessagesService, ImportantMessagesFlow],
+})
+export class ImportantMessagesModule {}

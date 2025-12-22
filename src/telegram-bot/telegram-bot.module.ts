@@ -10,6 +10,7 @@ import { StateModule } from '../common/state/state.module';
 import { MembershipRouter } from './routers/membership.router';
 import { UserChannelsModule } from '../modules/user-channels/user-channels.module';
 import { CoreChannelUsersModule } from '../modules/core-channel-users/core-channel-users.module';
+import { ImportantMessagesModule } from '../modules/important-messages/important-messages.module';
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { CoreChannelUsersModule } from '../modules/core-channel-users/core-chann
     SummaryCommentsModule,
     UserChannelsModule,
     CoreChannelUsersModule,
+    ImportantMessagesModule,
   ],
   providers: [
     TelegramBotService,

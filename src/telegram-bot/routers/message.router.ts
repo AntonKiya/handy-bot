@@ -3,6 +3,8 @@ import { Context } from 'telegraf';
 import { UserStateService } from '../../common/state/user-state.service';
 import { SummaryChannelFlow } from '../../modules/summary-channel/summary-channel.flow';
 import { SummaryCommentsFlow } from '../../modules/summary-comments/summary-comments.flow';
+import { ImportantMessagesFlow } from '../../modules/important-messages/important-messages.flow';
+import { GroupMessageData } from '../utils/types';
 
 @Injectable()
 export class MessageRouter {
@@ -12,6 +14,7 @@ export class MessageRouter {
     private readonly userStateService: UserStateService,
     private readonly summaryChannelFlow: SummaryChannelFlow,
     private readonly summaryCommentsFlow: SummaryCommentsFlow,
+    private readonly importantMessagesFlow: ImportantMessagesFlow,
   ) {}
 
   async route(ctx: Context) {
@@ -21,16 +24,16 @@ export class MessageRouter {
       return;
     }
 
-    // Извлекаем текст: либо text (чистый текст), либо caption (текст к медиа)
     const text = this.extractText(ctx);
     const chatType = ctx.chat?.type;
 
-    // Обработка личных сообщений боту (state-based логика)
+    // Обработка личных сообщений боту
     if (chatType === 'private') {
       await this.handlePrivateMessage(ctx, userId, text);
       return;
     }
 
+    // Обработка сообщений из групп
     if (chatType === 'group' || chatType === 'supergroup') {
       await this.handleGroupMessage(ctx, userId, text);
       return;
@@ -45,12 +48,10 @@ export class MessageRouter {
       return '';
     }
 
-    // Проверяем text (обычный текст)
     if ('text' in ctx.message && typeof ctx.message.text === 'string') {
       return ctx.message.text;
     }
 
-    // Проверяем caption (подпись к медиа)
     if ('caption' in ctx.message && typeof ctx.message.caption === 'string') {
       return ctx.message.caption;
     }
@@ -96,33 +97,39 @@ export class MessageRouter {
   }
 
   /**
-   * Обработка сообщений из групп (аггрегатор лидов + категоризация)
+   * Обработка сообщений из групп
+   * Router → Flow (Flow сам решает что делать)
    */
   private async handleGroupMessage(ctx: Context, userId: number, text: string) {
     const messageData = this.extractMessageData(ctx, userId, text);
 
-    // Логика передающая управление всем Flow которые должны обрабатывать сообщения (из групп и комментариев)
+    // Передаем в Flow - он сам определит важность через Service
+    await this.importantMessagesFlow.handleGroupMessage(ctx, messageData);
 
     this.logger.debug(
-      `Group message from user ${userId} in chat ${messageData.chatId}: text="${messageData.text || '(empty)'}"`,
+      `Group message processed: chatId=${messageData.chatId}, messageId=${messageData.messageId}`,
     );
   }
 
-  // TODO: Добавить общий интерфкйс для возвращаемого значения который будет использоваться по всему проекту
   /**
-   * Извлечение данных из сообщения в универсальный DTO
+   * Извлечение данных из сообщения
    */
-  private extractMessageData(ctx: Context, userId: number, text: string) {
+  private extractMessageData(
+    ctx: Context,
+    userId: number,
+    text: string,
+  ): GroupMessageData {
     const message = ctx.message;
     const chat = ctx.chat as any;
 
     return {
       chatId: chat.id,
       chatTitle: chat.title || null,
+      chatType: chat.type || 'supergroup',
+      chatUsername: chat.username || null,
       userId,
-      userName: ctx.from?.first_name || ctx.from?.username || null,
       text: text || null,
-      messageId: message?.message_id || null,
+      messageId: message?.message_id || 0,
       timestamp: new Date(),
       isReply: !!(
         message &&
@@ -133,7 +140,6 @@ export class MessageRouter {
         message && 'reply_to_message' in message
           ? message.reply_to_message?.message_id
           : null,
-      // Медиа информация
       hasPhoto: !!(message && 'photo' in message),
       hasVideo: !!(message && 'video' in message),
       hasDocument: !!(message && 'document' in message),
