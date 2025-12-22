@@ -12,11 +12,13 @@ import { LeadScorer } from './utils/scorers/lead.scorer';
 import { NegativeScorer } from './utils/scorers/negative.scorer';
 import { HypeScorer } from './utils/scorers/hype.scorer';
 import { UserChannelsModule } from '../user-channels/user-channels.module';
+import { ChannelModule } from '../channel/channel.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([ImportantMessage, DictionaryWord, Channel]),
     UserChannelsModule,
+    ChannelModule,
   ],
   providers: [
     // Services

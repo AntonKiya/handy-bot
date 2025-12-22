@@ -16,7 +16,6 @@ export class ImportantMessagesService {
   constructor(
     @InjectRepository(ImportantMessage)
     private readonly importantMessageRepository: Repository<ImportantMessage>,
-    @InjectRepository(Channel)
     private readonly channelService: ChannelService,
     private readonly categorizationService: CategorizationService,
   ) {}
