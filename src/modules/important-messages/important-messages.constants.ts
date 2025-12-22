@@ -35,19 +35,3 @@ export const CACHE_CONFIG = {
   MAX_CACHE_SIZE: 500,
   CLEANUP_INTERVAL_MS: 15 * 60 * 1000, // 15 минут - интервал очистки кеша
 } as const;
-
-// Callback namespaces
-export const IMPORTANT_MESSAGES_NAMESPACE = 'important';
-
-export enum ImportantMessagesAction {
-  Open = 'open',
-  Done = 'done',
-}
-
-// Формирование callback data
-export const IMPORTANT_MESSAGES_CB = {
-  open: (messageId: string) =>
-    `${IMPORTANT_MESSAGES_NAMESPACE}:${ImportantMessagesAction.Open}:${messageId}`,
-  done: (messageId: string) =>
-    `${IMPORTANT_MESSAGES_NAMESPACE}:${ImportantMessagesAction.Done}:${messageId}`,
-};

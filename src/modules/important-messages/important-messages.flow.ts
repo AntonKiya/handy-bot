@@ -1,13 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { Context, Markup } from 'telegraf';
+import { Context } from 'telegraf';
 import { ImportantMessagesService } from './important-messages.service';
 import { GroupMessageData } from '../../telegram-bot/utils/types';
 import { buildMessageLink } from './utils/link-builder.util';
-import {
-  IMPORTANT_MESSAGES_CB,
-  ImportantMessagesAction,
-} from './important-messages.constants';
+import { ImportantMessagesAction } from './important-messages.callbacks';
 import { UserChannelsService } from '../user-channels/user-channels.service';
+import { buildImportantMessagesNotificationKeyboard } from './important-messages.keyboard';
 
 @Injectable()
 export class ImportantMessagesFlow {
@@ -55,42 +53,28 @@ export class ImportantMessagesFlow {
     messageData: GroupMessageData,
     categories: string[],
   ): Promise<void> {
-    const { chatId, messageId, userId, text } = messageData;
-
     this.logger.debug(
-      `Handling important message ${messageId} from chat ${chatId}, categories: ${categories.join(', ')}`,
+      `Handling important message ${messageData.messageId} from chat ${messageData.chatId}, categories: ${categories.join(', ')}`,
     );
 
-    // Получаем канал
-    const channel =
-      await this.importantMessagesService.getChannelByTelegramChatId(chatId);
+    // Service сохраняет сообщение
+    const savedMessageId =
+      await this.importantMessagesService.saveImportantMessage(messageData);
 
-    if (!channel) {
-      this.logger.warn(
-        `Channel not found for chat_id ${chatId}, skipping save`,
-      );
+    if (!savedMessageId) {
       return;
     }
-
-    // Сохраняем в БД
-    const savedMessage =
-      await this.importantMessagesService.saveImportantMessage({
-        channelId: channel.id,
-        telegramMessageId: messageId,
-        telegramUserId: userId,
-        text,
-      });
 
     // Отправляем уведомления админам
     await this.sendNotificationToAdmins(
       ctx,
-      savedMessage.id,
+      savedMessageId,
       messageData,
       categories,
     );
 
-    // Обновляем время уведомления
-    await this.importantMessagesService.updateNotifiedAt(savedMessage.id);
+    // Service обновляет время уведомления
+    await this.importantMessagesService.updateNotifiedAt(savedMessageId);
   }
 
   /**
@@ -102,7 +86,6 @@ export class ImportantMessagesFlow {
     messageData: GroupMessageData,
     categories: string[],
   ): Promise<void> {
-    // TODO: Получить список админов через UserChannelsService.getChannelAdminsByTelegramChatId
     const adminIds =
       await this.userChannelsService.getChannelAdminsByTelegramChatId(
         messageData.chatId,
@@ -117,12 +100,15 @@ export class ImportantMessagesFlow {
 
     // Формируем текст и кнопки
     const text = this.buildNotificationText(messageData, categories);
-    const keyboard = this.buildNotificationKeyboard(
+
+    const keyboard = buildImportantMessagesNotificationKeyboard(
+      buildMessageLink(
+        messageData.chatId,
+        messageData.messageId,
+        messageData.chatType,
+        messageData.chatUsername,
+      ),
       messageId,
-      messageData.chatId,
-      messageData.messageId,
-      messageData.chatType,
-      messageData.chatUsername,
     );
 
     // Отправляем каждому админу
@@ -157,31 +143,6 @@ export class ImportantMessagesFlow {
       : '(нет текста)';
 
     return `📩 Важное сообщение в канале "${channelName}"\n\nКатегории: ${categoriesTags}\n\n${preview}`;
-  }
-
-  /**
-   * Формирование клавиатуры с кнопками
-   */
-  private buildNotificationKeyboard(
-    messageId: string,
-    chatId: number,
-    telegramMessageId: number,
-    chatType: string,
-    username?: string | null,
-  ) {
-    const messageLink = buildMessageLink(
-      chatId,
-      telegramMessageId,
-      chatType,
-      username,
-    );
-
-    return Markup.inlineKeyboard([
-      [
-        Markup.button.url('Открыть', messageLink),
-        Markup.button.callback('Готово', IMPORTANT_MESSAGES_CB.done(messageId)),
-      ],
-    ]);
   }
 
   /**

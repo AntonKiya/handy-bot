@@ -1,6 +1,7 @@
 /**
  * Нормализация текста для анализа
  * - Приводит к lowercase
+ * - Удаляет знаки препинания
  * - Удаляет лишние пробелы
  * - Базовая очистка
  */
@@ -9,7 +10,11 @@ export function normalizeText(text: string): string {
     return '';
   }
 
-  return text.toLowerCase().trim().replace(/\s+/g, ' '); // заменяем множественные пробелы на один
+  return text
+    .toLowerCase()
+    .replace(/[.,!?;:()"'«»—–\-]/g, ' ') // удаляем знаки препинания, заменяя на пробел
+    .trim()
+    .replace(/\s+/g, ' '); // заменяем множественные пробелы на один
 }
 
 /**
@@ -56,7 +61,6 @@ export function hasWordsFromDictionary(
       phrases.push(item);
     }
   }
-
   // Проверяем наличие фраз в тексте
   for (const phrase of phrases) {
     if (normalizedText.includes(phrase)) {

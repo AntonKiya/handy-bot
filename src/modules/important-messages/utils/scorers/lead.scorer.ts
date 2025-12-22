@@ -30,7 +30,10 @@ export class LeadScorer {
     }
 
     // Проверка context словаря (продуктовые лид-слова)
-    if (contextWords.size > 0 && hasWordsFromDictionary(normalizedText, contextWords)) {
+    if (
+      contextWords.size > 0 &&
+      hasWordsFromDictionary(normalizedText, contextWords)
+    ) {
       score += WEIGHTS.LEAD.CONTEXT_WORDS;
       signals.push('has_context_lead_words');
     }

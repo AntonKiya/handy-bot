@@ -9,4 +9,15 @@ export class ChannelService {
     @InjectRepository(Channel)
     private readonly channelRepository: Repository<Channel>,
   ) {}
+
+  /**
+   * Получение канала по telegram_chat_id
+   */
+  async getChannelByTelegramChatId(
+    telegramChatId: number,
+  ): Promise<Channel | null> {
+    return this.channelRepository.findOne({
+      where: { telegram_chat_id: telegramChatId },
+    });
+  }
 }

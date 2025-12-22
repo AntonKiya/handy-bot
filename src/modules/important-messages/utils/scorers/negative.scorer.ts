@@ -27,7 +27,10 @@ export class NegativeScorer {
     }
 
     // Проверка context словаря (упоминания бренда/@username)
-    if (contextWords.size > 0 && hasWordsFromDictionary(normalizedText, contextWords)) {
+    if (
+      contextWords.size > 0 &&
+      hasWordsFromDictionary(normalizedText, contextWords)
+    ) {
       score += WEIGHTS.NEGATIVE.CONTEXT_WORDS;
       signals.push('mentions_brand_or_admin');
     }

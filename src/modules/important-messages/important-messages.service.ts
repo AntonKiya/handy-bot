@@ -7,6 +7,7 @@ import { CategorizationService } from './categorization.service';
 import { GroupMessageData } from '../../telegram-bot/utils/types';
 import { getWordCount } from './utils/text-normalizer.util';
 import { MIN_WORD_COUNT } from './important-messages.constants';
+import { ChannelService } from '../channel/channel.service';
 
 @Injectable()
 export class ImportantMessagesService {
@@ -16,7 +17,7 @@ export class ImportantMessagesService {
     @InjectRepository(ImportantMessage)
     private readonly importantMessageRepository: Repository<ImportantMessage>,
     @InjectRepository(Channel)
-    private readonly channelRepository: Repository<Channel>,
+    private readonly channelService: ChannelService,
     private readonly categorizationService: CategorizationService,
   ) {}
 
@@ -24,7 +25,7 @@ export class ImportantMessagesService {
    * Обработка входящего сообщения из группы
    * Возвращает категории если сообщение важное, иначе null
    *
-   * Вызывается из Router
+   * Вызывается из Flow
    */
   async processGroupMessage(
     messageData: GroupMessageData,
@@ -47,7 +48,8 @@ export class ImportantMessagesService {
     }
 
     // Получаем канал из БД
-    const channel = await this.getChannelByTelegramChatId(chatId);
+    const channel =
+      await this.channelService.getChannelByTelegramChatId(chatId);
 
     if (!channel) {
       this.logger.debug(
@@ -78,22 +80,32 @@ export class ImportantMessagesService {
   }
 
   /**
-   * Сохранение важного сообщения в БД
+   * Сохранение важного сообщения и подготовка к отправке уведомлений
+   * Возвращает ID сохраненного сообщения
    *
    * Вызывается из Flow
    */
-  async saveImportantMessage(params: {
-    channelId: string;
-    telegramMessageId: number;
-    telegramUserId: number;
-    text: string | null;
-  }): Promise<ImportantMessage> {
-    const { channelId, telegramMessageId, telegramUserId, text } = params;
+  async saveImportantMessage(
+    messageData: GroupMessageData,
+  ): Promise<string | null> {
+    const { chatId, messageId, userId, text } = messageData;
 
+    // Получаем канал
+    const channel =
+      await this.channelService.getChannelByTelegramChatId(chatId);
+
+    if (!channel) {
+      this.logger.warn(
+        `Channel not found for chat_id ${chatId}, skipping save`,
+      );
+      return null;
+    }
+
+    // Сохраняем в БД
     const importantMessage = this.importantMessageRepository.create({
-      channel: { id: channelId },
-      telegram_message_id: telegramMessageId,
-      telegram_user_id: telegramUserId,
+      channel: { id: channel.id },
+      telegram_message_id: messageId,
+      telegram_user_id: userId,
       text,
       notified_at: null,
     });
@@ -102,7 +114,7 @@ export class ImportantMessagesService {
 
     this.logger.debug(`Saved important message: id=${saved.id}`);
 
-    return saved;
+    return saved.id;
   }
 
   /**
@@ -115,16 +127,5 @@ export class ImportantMessagesService {
       { id: messageId },
       { notified_at: new Date() },
     );
-  }
-
-  /**
-   * Получение канала по telegram_chat_id
-   */
-  async getChannelByTelegramChatId(
-    telegramChatId: number,
-  ): Promise<Channel | null> {
-    return this.channelRepository.findOne({
-      where: { telegram_chat_id: telegramChatId },
-    });
   }
 }
