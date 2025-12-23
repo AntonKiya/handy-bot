@@ -104,12 +104,11 @@ export class ImportantMessagesFlow {
         replyToMessageId,
       );
 
-      // Проверяем hype порог (reactions = 0, т.к. проверяем только replies)
+      // Проверяем hype порог
       const shouldNotify =
         await this.importantMessagesService.checkHypeThreshold(
           channel.id,
           replyToMessageId,
-          0,
         );
 
       if (shouldNotify) {
@@ -143,12 +142,18 @@ export class ImportantMessagesFlow {
       const reactionsCount =
         this.importantMessagesService.calculateTotalReactions(reactions);
 
-      // Проверяем hype порог
+      // Обновляем reactions_count в БД
+      await this.importantMessagesService.updateReactionsCount(
+        channel.id,
+        messageId,
+        reactionsCount,
+      );
+
+      // Проверяем hype порог (использует актуальные данные из БД)
       const shouldNotify =
         await this.importantMessagesService.checkHypeThreshold(
           channel.id,
           messageId,
-          reactionsCount,
         );
 
       if (shouldNotify) {

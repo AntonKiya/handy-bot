@@ -102,6 +102,20 @@ export class ImportantMessagesService {
       return null;
     }
 
+    const existing = await this.importantMessageRepository.findOne({
+      where: {
+        channel: { id: channel.id },
+        telegram_message_id: messageId,
+      },
+    });
+
+    if (existing) {
+      this.logger.debug(
+        `Message ${messageId} already exists, returning existing id: ${existing.id}`,
+      );
+      return existing.id;
+    }
+
     // Сохраняем в БД
     const importantMessage = this.importantMessageRepository.create({
       channel: { id: channel.id },
@@ -110,6 +124,7 @@ export class ImportantMessagesService {
       text,
       notified_at: null,
       replies_count: 0,
+      reactions_count: 0,
       hype_notified_at: null,
     });
 
@@ -181,6 +196,28 @@ export class ImportantMessagesService {
   }
 
   /**
+   * Обновление счетчика реакций
+   * Вызывается из Flow при событии message_reaction_count
+   */
+  async updateReactionsCount(
+    channelId: string,
+    telegramMessageId: number,
+    reactionsCount: number,
+  ): Promise<void> {
+    await this.importantMessageRepository.update(
+      {
+        channel: { id: channelId },
+        telegram_message_id: telegramMessageId,
+      },
+      { reactions_count: reactionsCount },
+    );
+
+    this.logger.debug(
+      `Updated reactions_count to ${reactionsCount} for message ${telegramMessageId} in channel ${channelId}`,
+    );
+  }
+
+  /**
    * Проверка hype порога
    * Возвращает true если порог достигнут и уведомление еще не отправлено
    *
@@ -189,7 +226,6 @@ export class ImportantMessagesService {
   async checkHypeThreshold(
     channelId: string,
     telegramMessageId: number,
-    reactionsCount: number,
   ): Promise<boolean> {
     const message = await this.getMessageByTelegramId(
       channelId,
@@ -205,14 +241,14 @@ export class ImportantMessagesService {
       return false;
     }
 
-    // Вычисляем hype score
+    // Вычисляем hype score используя АКТУАЛЬНЫЕ данные из БД
     const hypeResult = this.hypeScorer.calculateScore(
-      reactionsCount,
+      message.reactions_count,
       message.replies_count,
     );
 
     this.logger.debug(
-      `Hype score for message ${message.telegram_message_id}: ${hypeResult.score} (reactions: ${reactionsCount}, replies: ${message.replies_count})`,
+      `Hype score for message ${message.telegram_message_id}: ${hypeResult.score} (reactions: ${message.reactions_count}, replies: ${message.replies_count})`,
     );
 
     // Возвращаем true если порог достигнут

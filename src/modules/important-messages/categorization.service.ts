@@ -40,7 +40,6 @@ export class CategorizationService {
           question: 0,
           lead: 0,
           negative: 0,
-          hype: 0,
         },
       };
     }
@@ -107,13 +106,11 @@ export class CategorizationService {
         question: questionResult.score,
         lead: leadResult.score,
         negative: negativeResult.score,
-        hype: 0, // Hype пока не реализован
       },
       signals: {
         question: questionResult.signals,
         lead: leadResult.signals,
         negative: negativeResult.signals,
-        hype: [],
       },
     };
 

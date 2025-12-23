@@ -1,16 +1,14 @@
 export interface CategorizationResult {
-  categories: string[];
+  categories: string[]; // 'question' | 'lead' | 'negative' (БЕЗ hype!)
   scores: {
     question: number;
     lead: number;
     negative: number;
-    hype: number;
   };
   signals?: {
     question: string[];
     lead: string[];
     negative: string[];
-    hype: string[];
   };
 }
 

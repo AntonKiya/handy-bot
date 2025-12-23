@@ -41,6 +41,9 @@ export class ImportantMessage {
   @Column({ name: 'replies_count', type: 'int', default: 0 })
   replies_count: number;
 
+  @Column({ name: 'reactions_count', type: 'int', default: 0 })
+  reactions_count: number;
+
   @Column({ name: 'hype_notified_at', type: 'timestamp', nullable: true })
   hype_notified_at: Date | null;
 
