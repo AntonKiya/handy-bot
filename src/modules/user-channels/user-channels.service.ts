@@ -127,6 +127,15 @@ export class UserChannelsService {
       return { type: 'skipped', reason: 'channel-not-found' };
     }
 
+    const chatInfo = await ctx.telegram.getChat(chatId);
+
+    if ('linked_chat_id' in chatInfo && chatInfo.linked_chat_id) {
+      await this.channelRepository.update(
+        { id: channel.id },
+        { discussion_group_id: chatInfo.linked_chat_id },
+      );
+    }
+
     this.logger.debug(
       `Channel upserted/retrieved: telegram_chat_id=${chatId}, id=${channel.id}, username=${channel.username}`,
     );

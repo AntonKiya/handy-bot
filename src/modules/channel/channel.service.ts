@@ -13,11 +13,12 @@ export class ChannelService {
   /**
    * Получение канала по telegram_chat_id
    */
-  async getChannelByTelegramChatId(
-    telegramChatId: number,
-  ): Promise<Channel | null> {
+  async getChannelByTelegramChatId(chatId: number): Promise<Channel | null> {
     return this.channelRepository.findOne({
-      where: { telegram_chat_id: telegramChatId },
+      where: [
+        { telegram_chat_id: chatId }, // Основной канал
+        { discussion_group_id: chatId }, // Группа обсуждений канала
+      ],
     });
   }
 }

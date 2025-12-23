@@ -11,6 +11,9 @@ export class Channel {
   @Column({ type: 'bigint', unique: true })
   telegram_chat_id: number;
 
+  @Column({ type: 'bigint', nullable: true })
+  discussion_group_id: number | null;
+
   /**
    * Username канала (без @).
    * TODO: Учесть возможное изменение имени.

@@ -33,6 +33,11 @@ export class ImportantMessagesService {
   ): Promise<string[] | null> {
     const { text, messageId, chatId } = messageData;
 
+    if (messageData.chatType === 'channel') {
+      this.logger.debug(`Post in channel ${chatId}, skipping`);
+      return null;
+    }
+
     // Проверка наличия текста
     if (!text || text.trim().length === 0) {
       this.logger.debug(`No text in message ${messageId}, skipping`);
