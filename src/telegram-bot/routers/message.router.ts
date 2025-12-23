@@ -103,6 +103,9 @@ export class MessageRouter {
   private async handleGroupMessage(ctx: Context, userId: number, text: string) {
     const messageData = this.extractMessageData(ctx, userId, text);
 
+    // Передаем в Flow - он сам определит важность через Service
+    await this.importantMessagesFlow.handleGroupMessage(ctx, messageData);
+
     // Обработка ответа на сообщение (для hype)
     if (messageData.isReply && messageData.replyToMessageId) {
       await this.importantMessagesFlow.handleReply(
@@ -111,9 +114,6 @@ export class MessageRouter {
         messageData.replyToMessageId,
       );
     }
-
-    // Передаем в Flow - он сам определит важность через Service
-    await this.importantMessagesFlow.handleGroupMessage(ctx, messageData);
 
     this.logger.debug(
       `Group message processed: chatId=${messageData.chatId}, messageId=${messageData.messageId}`,

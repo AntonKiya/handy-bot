@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { ReactionCount } from 'telegraf/types';
+import { ReactionType } from 'telegraf/types';
 import { ImportantMessage } from './important-message.entity';
 import { CategorizationService } from './categorization.service';
 import { GroupMessageData } from '../../telegram-bot/utils/types';
@@ -158,8 +158,15 @@ export class ImportantMessagesService {
    * Подсчет общего количества реакций
    * Вызывается из Flow
    */
-  calculateTotalReactions(reactions: ReactionCount[]): number {
-    return reactions.reduce((sum, reaction) => sum + reaction.total_count, 0);
+  async calculateTotalReactions(
+    channelId: string,
+    messageId: number,
+    oldReaction: ReactionType[],
+    newReaction: ReactionType[],
+  ): Promise<number> {
+    const message = await this.getMessageByTelegramId(channelId, messageId);
+    const delta = (newReaction?.length ?? 0) - (oldReaction?.length ?? 0);
+    return (message.reactions_count += delta);
   }
 
   /**
@@ -176,6 +183,38 @@ export class ImportantMessagesService {
       },
       relations: ['channel'],
     });
+  }
+
+  /**
+   * Сохранение сообщения для отслеживания hype (минимальная запись)
+   * Используется когда на пост отвечают, но сам пост не был сохранен
+   */
+  async saveMessageForHypeTracking(
+    channelId: string,
+    telegramMessageId: number,
+    telegramUserId?: number,
+    text?: string | null,
+  ): Promise<void> {
+    const existing = await this.importantMessageRepository.findOne({
+      where: {
+        channel: { id: channelId },
+        telegram_message_id: telegramMessageId,
+      },
+    });
+    if (existing) return;
+
+    const importantMessage = this.importantMessageRepository.create({
+      channel: { id: channelId },
+      telegram_message_id: telegramMessageId,
+      telegram_user_id: telegramUserId ?? 0, // временно ок, но лучше nullable
+      text: text ?? null,
+      notified_at: null,
+      replies_count: 0,
+      reactions_count: 0,
+      hype_notified_at: null,
+    });
+
+    await this.importantMessageRepository.save(importantMessage);
   }
 
   /**
