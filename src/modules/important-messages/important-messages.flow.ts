@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Context } from 'telegraf';
-import { ReactionCount } from 'telegraf/types';
+import { ReactionType } from 'telegraf/types';
 import { ImportantMessagesService } from './important-messages.service';
 import { GroupMessageData } from '../../telegram-bot/utils/types';
 import { buildMessageLink } from './utils/link-builder.util';
@@ -28,6 +28,14 @@ export class ImportantMessagesFlow {
     messageData: GroupMessageData,
   ): Promise<void> {
     try {
+      // Service сохраняет сообщение
+      const savedMessageId =
+        await this.importantMessagesService.saveImportantMessage(messageData);
+
+      if (!savedMessageId) {
+        return;
+      }
+
       // Service определяет важность сообщения
       const categories =
         await this.importantMessagesService.processGroupMessage(messageData);
@@ -38,7 +46,12 @@ export class ImportantMessagesFlow {
       }
 
       // Если важное - обрабатываем
-      await this.handleImportantMessage(ctx, messageData, categories);
+      await this.handleImportantMessage(
+        ctx,
+        messageData,
+        categories,
+        savedMessageId,
+      );
     } catch (error) {
       this.logger.error(
         `Error in handleGroupMessage: ${error.message}`,
@@ -55,18 +68,11 @@ export class ImportantMessagesFlow {
     ctx: Context,
     messageData: GroupMessageData,
     categories: string[],
+    savedMessageId: string,
   ): Promise<void> {
     this.logger.debug(
       `Handling important message ${messageData.messageId} from chat ${messageData.chatId}, categories: ${categories.join(', ')}`,
     );
-
-    // Service сохраняет сообщение
-    const savedMessageId =
-      await this.importantMessagesService.saveImportantMessage(messageData);
-
-    if (!savedMessageId) {
-      return;
-    }
 
     // Отправляем уведомления админам
     await this.sendNotificationToAdmins(
@@ -80,6 +86,7 @@ export class ImportantMessagesFlow {
     await this.importantMessagesService.updateNotifiedAt(savedMessageId);
   }
 
+  // TODO: сейчас сюда приходит и сам пост и комментарии админа, такого быть не должно
   /**
    * Обработка reply на важное сообщение
    * Вызывается из Router
@@ -94,8 +101,27 @@ export class ImportantMessagesFlow {
       const channel =
         await this.channelService.getChannelByTelegramChatId(chatId);
 
-      if (!channel) {
-        return;
+      if (!channel) return;
+
+      // Проверяем существует ли запись
+      const message =
+        await this.importantMessagesService.getMessageByTelegramId(
+          channel.id,
+          replyToMessageId,
+        );
+
+      // Если записи нет - создаем (это пост, на который отвечают)
+      if (!message) {
+        const replyToMessage = (ctx.message as any)?.reply_to_message;
+        const originalUserId = replyToMessage?.from?.id || null;
+        const originalText = replyToMessage?.text || null;
+
+        await this.importantMessagesService.saveMessageForHypeTracking(
+          channel.id,
+          replyToMessageId,
+          originalUserId,
+          originalText,
+        );
       }
 
       // Инкрементим счетчик
@@ -119,6 +145,7 @@ export class ImportantMessagesFlow {
     }
   }
 
+  // TODO: сейчас сюда приходит и сам пост и комментарии админа, такого быть не должно
   /**
    * Обработка события message_reaction_count
    * Вызывается из Router
@@ -127,20 +154,42 @@ export class ImportantMessagesFlow {
     ctx: Context,
     chatId: number,
     messageId: number,
-    reactions: ReactionCount[],
+    oldReaction: ReactionType[],
+    newReaction: ReactionType[],
   ): Promise<void> {
     try {
       // Получаем канал
       const channel =
         await this.channelService.getChannelByTelegramChatId(chatId);
 
-      if (!channel) {
-        return;
+      if (!channel) return;
+
+      // Проверяем существует ли запись
+      const message =
+        await this.importantMessagesService.getMessageByTelegramId(
+          channel.id,
+          messageId,
+        );
+
+      // Если записи нет - создаем
+      if (!message) {
+        await this.importantMessagesService.saveMessageForHypeTracking(
+          channel.id,
+          messageId,
+          // TODO: Чтобы не передавать 0 и null, можно сохранять каждое сообщение заранее
+          0, // telegramUserId отправителя сообщения на которое поставили рекацию - неизвестен
+          null, // text отправителя сообщения на которое поставили рекацию - неизвестен
+        );
       }
 
       // Подсчитываем общее количество реакций через Service
       const reactionsCount =
-        this.importantMessagesService.calculateTotalReactions(reactions);
+        await this.importantMessagesService.calculateTotalReactions(
+          channel.id,
+          messageId,
+          oldReaction,
+          newReaction,
+        );
 
       // Обновляем reactions_count в БД
       await this.importantMessagesService.updateReactionsCount(

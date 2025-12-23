@@ -14,15 +14,16 @@ export class ReactionRouter {
    * Вызывается из TelegramBotService
    */
   async route(ctx: Context): Promise<void> {
-    const update = ctx.update as Update.MessageReactionCountUpdate;
+    const update = ctx.update as Update.MessageReactionUpdate;
 
-    if (!update.message_reaction_count) {
+    if (!update.message_reaction) {
       this.logger.warn('message_reaction_count is missing in update');
       return;
     }
 
     try {
-      const { chat, message_id, reactions } = update.message_reaction_count;
+      const { chat, message_id, old_reaction, new_reaction } =
+        update.message_reaction;
 
       this.logger.debug(
         `Processing reaction count for message ${message_id} in chat ${chat.id}`,
@@ -32,7 +33,8 @@ export class ReactionRouter {
         ctx,
         chat.id,
         message_id,
-        reactions,
+        old_reaction,
+        new_reaction,
       );
     } catch (error) {
       this.logger.error(

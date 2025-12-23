@@ -56,12 +56,17 @@ export class TelegramBotService implements OnModuleInit, OnApplicationShutdown {
     // Централизованный обработчик my_chat_member (добавление бота)
     this.bot.on('my_chat_member', (ctx) => this.membershipRouter.route(ctx));
 
-    this.bot.on('message_reaction_count', (ctx) =>
-      this.reactionRouter.route(ctx),
-    );
+    this.bot.on('message_reaction', (ctx) => this.reactionRouter.route(ctx));
 
     this.bot
-      .launch()
+      .launch({
+        allowedUpdates: [
+          'message',
+          'callback_query',
+          'my_chat_member',
+          'message_reaction',
+        ],
+      })
       .then(() => this.logger.log('Telegram bot successfully launched'))
       .catch((err) => this.logger.error('Failed to launch bot', err));
   }
