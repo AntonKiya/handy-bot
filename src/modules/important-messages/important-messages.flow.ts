@@ -254,13 +254,9 @@ export class ImportantMessagesFlow {
       hasVoice: false,
     };
 
-    await this.sendNotificationToAdmins(
-      ctx.telegram,
-      message.id,
-      messageData,
-      ['hype'],
-      message.post_message_id,
-    );
+    await this.sendNotificationToAdmins(ctx.telegram, message.id, messageData, [
+      'hype',
+    ]);
 
     // Обновляем hype_notified_at
     await this.importantMessagesService.updateHypeNotifiedAt(
@@ -278,11 +274,21 @@ export class ImportantMessagesFlow {
     messageId: string,
     messageData: GroupMessageData,
     categories: string[],
-    postMessageId?: number | null,
   ): Promise<void> {
+    const message = await this.importantMessagesService.getById(messageId);
+
+    if (!message) {
+      return;
+    }
+
+    const channel = message.channel;
+
+    const postMessageId = message.post_message_id;
+    const channelUsername = channel.username;
+
     const adminIds =
       await this.userChannelsService.getChannelAdminsByTelegramChatId(
-        messageData.chatId,
+        channel.telegram_chat_id,
       );
 
     if (adminIds.length === 0) {
@@ -292,21 +298,13 @@ export class ImportantMessagesFlow {
       return;
     }
 
-    const channel = await this.channelService.getChannelByTelegramChatId(
-      messageData.chatId,
-    );
-
-    if (!channel) {
-      return;
-    }
-
     // Формируем текст и кнопки
     const text = this.buildNotificationText(messageData, categories);
 
     let messageLink = '';
-    if (messageData.chatUsername && postMessageId && messageData.messageId) {
+    if (channelUsername && postMessageId) {
       messageLink = buildCommentLink(
-        messageData.chatUsername,
+        channelUsername,
         postMessageId,
         messageData.messageId,
       );

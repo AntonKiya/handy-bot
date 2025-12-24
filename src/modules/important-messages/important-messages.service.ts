@@ -104,6 +104,13 @@ export class ImportantMessagesService {
     return null;
   }
 
+  async getById(id: string): Promise<ImportantMessage | null> {
+    return this.importantMessageRepository.findOne({
+      where: { id },
+      relations: ['channel'],
+    });
+  }
+
   /**
    * Обработка входящего сообщения из группы
    * Возвращает категории если сообщение важное, иначе null

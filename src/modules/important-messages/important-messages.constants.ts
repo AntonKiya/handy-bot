@@ -1,7 +1,7 @@
 export const THRESHOLDS = {
   QUESTION: 4,
   LEAD: 6,
-  NEGATIVE: 5,
+  NEGATIVE: 4,
   HYPE: 5,
 } as const;
 
