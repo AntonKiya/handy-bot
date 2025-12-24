@@ -28,7 +28,7 @@ export class ImportantMessagesService {
    *
    * Случай 1: Автофорвард поста → берем forward_from_message_id
    * Случай 2: Первый комментарий → берем из reply_to_message.forward_from_message_id
-   * Случай 3: Reply на комментарий → ищем в БД через message_thread_id
+   * Случай 3: Reply на комментарий → ищем reply_to_message в БД
    */
   async resolvePostMessageId(
     ctx: Context,
@@ -39,7 +39,7 @@ export class ImportantMessagesService {
 
     // Получаем наш канал для проверки
     const ourChannel = await this.channelService.getById(channelId);
-    const ourChannelChatId = Number(ourChannel.telegram_chat_id); // ← ИСПРАВЛЕНИЕ: конвертируем в number
+    const ourChannelChatId = Number(ourChannel.telegram_chat_id);
 
     // Случай 1: Автофорвард ТОЛЬКО из НАШЕГО канала
     if (
@@ -66,7 +66,25 @@ export class ImportantMessagesService {
       return replyTo.forward_from_message_id;
     }
 
-    // Случай 3: Reply в треде
+    // Случай 3: Reply на комментарий
+    // Ищем reply_to_message в БД и берем его post_message_id
+    if (replyTo?.message_id) {
+      const replyToMessage = await this.importantMessageRepository.findOne({
+        where: {
+          channel: { id: channelId },
+          telegram_message_id: replyTo.message_id,
+        },
+      });
+
+      if (replyToMessage?.post_message_id) {
+        this.logger.debug(
+          `Found post_message_id from reply_to_message: ${replyToMessage.post_message_id}`,
+        );
+        return replyToMessage.post_message_id;
+      }
+    }
+
+    // Случай 4: Fallback - ищем через message_thread_id
     if (message.message_thread_id) {
       const threadMessage = await this.importantMessageRepository.findOne({
         where: {
@@ -76,6 +94,9 @@ export class ImportantMessagesService {
       });
 
       if (threadMessage?.post_message_id) {
+        this.logger.debug(
+          `Found post_message_id in thread root: ${threadMessage.post_message_id}`,
+        );
         return threadMessage.post_message_id;
       }
     }
@@ -169,8 +190,7 @@ export class ImportantMessagesService {
       return null;
     }
 
-    // НОВОЕ: Пропускаем автофорварды (посты)
-    // Админ и так знает о своем посте, уведомление не нужно
+    // Пропускаем автофорварды (посты) - админ и так знает о своем посте
     const message = ctx.message as any;
     if (message?.is_automatic_forward === true) {
       this.logger.debug(
