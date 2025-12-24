@@ -47,6 +47,6 @@ export class ImportantMessage {
   @Column({ name: 'hype_notified_at', type: 'timestamp', nullable: true })
   hype_notified_at: Date | null;
 
-  // TODO: Добавить индексы для оптимизации:
-  // - INDEX на (channel_id, created_at) для выборки последних сообщений
+  @Column({ name: 'post_message_id', type: 'bigint', nullable: true })
+  post_message_id: number | null; // ID поста в канале (для комментариев)
 }

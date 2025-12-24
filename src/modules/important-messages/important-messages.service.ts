@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { Context } from 'telegraf';
 import { ReactionType } from 'telegraf/types';
 import { ImportantMessage } from './important-message.entity';
 import { CategorizationService } from './categorization.service';
@@ -21,6 +22,94 @@ export class ImportantMessagesService {
     private readonly categorizationService: CategorizationService,
     private readonly hypeScorer: HypeScorer,
   ) {}
+
+  /**
+   * Определение post_message_id (ID поста в канале)
+   *
+   * Случай 1: Автофорвард поста → берем forward_from_message_id
+   * Случай 2: Первый комментарий → берем из reply_to_message.forward_from_message_id
+   * Случай 3: Reply на комментарий → ищем reply_to_message в БД
+   */
+  async resolvePostMessageId(
+    ctx: Context,
+    channelId: string,
+  ): Promise<number | null> {
+    const message = ctx.message as any;
+    if (!message) return null;
+
+    // Получаем наш канал для проверки
+    const ourChannel = await this.channelService.getById(channelId);
+    const ourChannelChatId = Number(ourChannel.telegram_chat_id);
+
+    // Случай 1: Автофорвард ТОЛЬКО из НАШЕГО канала
+    if (
+      message.is_automatic_forward === true &&
+      message.forward_from_chat?.id === ourChannelChatId &&
+      message.forward_from_message_id
+    ) {
+      this.logger.debug(
+        `Post auto-forward from our channel: ${message.forward_from_message_id}`,
+      );
+      return message.forward_from_message_id;
+    }
+
+    // Случай 2: Первый комментарий на автофорвард НАШЕГО канала
+    const replyTo = message.reply_to_message;
+    if (
+      replyTo?.is_automatic_forward === true &&
+      replyTo.forward_from_chat?.id === ourChannelChatId &&
+      replyTo.forward_from_message_id
+    ) {
+      this.logger.debug(
+        `First comment on our channel post: ${replyTo.forward_from_message_id}`,
+      );
+      return replyTo.forward_from_message_id;
+    }
+
+    // Случай 3: Reply на комментарий
+    // Ищем reply_to_message в БД и берем его post_message_id
+    if (replyTo?.message_id) {
+      const replyToMessage = await this.importantMessageRepository.findOne({
+        where: {
+          channel: { id: channelId },
+          telegram_message_id: replyTo.message_id,
+        },
+      });
+
+      if (replyToMessage?.post_message_id) {
+        this.logger.debug(
+          `Found post_message_id from reply_to_message: ${replyToMessage.post_message_id}`,
+        );
+        return replyToMessage.post_message_id;
+      }
+    }
+
+    // Случай 4: Fallback - ищем через message_thread_id
+    if (message.message_thread_id) {
+      const threadMessage = await this.importantMessageRepository.findOne({
+        where: {
+          channel: { id: channelId },
+          telegram_message_id: message.message_thread_id,
+        },
+      });
+
+      if (threadMessage?.post_message_id) {
+        this.logger.debug(
+          `Found post_message_id in thread root: ${threadMessage.post_message_id}`,
+        );
+        return threadMessage.post_message_id;
+      }
+    }
+
+    return null;
+  }
+
+  async getById(id: string): Promise<ImportantMessage | null> {
+    return this.importantMessageRepository.findOne({
+      where: { id },
+      relations: ['channel'],
+    });
+  }
 
   /**
    * Обработка входящего сообщения из группы
@@ -93,6 +182,7 @@ export class ImportantMessagesService {
    */
   async saveImportantMessage(
     messageData: GroupMessageData,
+    ctx: Context,
   ): Promise<string | null> {
     const { chatId, messageId, userId, text } = messageData;
 
@@ -103,6 +193,15 @@ export class ImportantMessagesService {
     if (!channel) {
       this.logger.warn(
         `Channel not found for chat_id ${chatId}, skipping save`,
+      );
+      return null;
+    }
+
+    // Пропускаем автофорварды (посты) - админ и так знает о своем посте
+    const message = ctx.message as any;
+    if (message?.is_automatic_forward === true) {
+      this.logger.debug(
+        `Skipping auto-forward (post) ${messageId} - no notification needed`,
       );
       return null;
     }
@@ -121,7 +220,9 @@ export class ImportantMessagesService {
       return existing.id;
     }
 
-    // Сохраняем в БД
+    // Определяем post_message_id
+    const postMessageId = await this.resolvePostMessageId(ctx, channel.id);
+
     const importantMessage = this.importantMessageRepository.create({
       channel: { id: channel.id },
       telegram_message_id: messageId,
@@ -131,11 +232,14 @@ export class ImportantMessagesService {
       replies_count: 0,
       reactions_count: 0,
       hype_notified_at: null,
+      post_message_id: postMessageId,
     });
 
     const saved = await this.importantMessageRepository.save(importantMessage);
 
-    this.logger.debug(`Saved important message: id=${saved.id}`);
+    this.logger.debug(
+      `Saved important message: id=${saved.id}, post_message_id=${postMessageId}`,
+    );
 
     return saved.id;
   }
@@ -166,7 +270,7 @@ export class ImportantMessagesService {
   ): Promise<number> {
     const message = await this.getMessageByTelegramId(channelId, messageId);
     const delta = (newReaction?.length ?? 0) - (oldReaction?.length ?? 0);
-    return (message.reactions_count += delta);
+    return message.reactions_count + delta;
   }
 
   /**
@@ -187,13 +291,12 @@ export class ImportantMessagesService {
 
   /**
    * Сохранение сообщения для отслеживания hype (минимальная запись)
-   * Используется когда на пост отвечают, но сам пост не был сохранен
+   * Используется когда на пост/комментарий отвечают, но сам пост/комментарий не был сохранен
    */
   async saveMessageForHypeTracking(
     channelId: string,
     telegramMessageId: number,
-    telegramUserId?: number,
-    text?: string | null,
+    ctx: Context,
   ): Promise<void> {
     const existing = await this.importantMessageRepository.findOne({
       where: {
@@ -203,18 +306,40 @@ export class ImportantMessagesService {
     });
     if (existing) return;
 
+    // Получаем данные из reply_to_message
+    const replyToMessage = (ctx.message as any)?.reply_to_message;
+
+    // Пропускаем автофорварды (посты) - hype на посты не нужен
+    if (replyToMessage?.is_automatic_forward === true) {
+      this.logger.debug(
+        `Skipping auto-forward (post) ${telegramMessageId} - no hype tracking for posts`,
+      );
+      return;
+    }
+
+    const userId = replyToMessage?.from?.id || 0;
+    const text = replyToMessage?.text || null;
+
+    // Определяем post_message_id
+    const postMessageId = await this.resolvePostMessageId(ctx, channelId);
+
     const importantMessage = this.importantMessageRepository.create({
       channel: { id: channelId },
       telegram_message_id: telegramMessageId,
-      telegram_user_id: telegramUserId ?? 0, // временно ок, но лучше nullable
-      text: text ?? null,
+      telegram_user_id: userId,
+      text,
       notified_at: null,
       replies_count: 0,
       reactions_count: 0,
       hype_notified_at: null,
+      post_message_id: postMessageId,
     });
 
     await this.importantMessageRepository.save(importantMessage);
+
+    this.logger.debug(
+      `Created hype tracking entry for message ${telegramMessageId}, post_message_id=${postMessageId}`,
+    );
   }
 
   /**

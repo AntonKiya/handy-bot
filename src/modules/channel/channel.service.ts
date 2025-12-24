@@ -10,6 +10,12 @@ export class ChannelService {
     private readonly channelRepository: Repository<Channel>,
   ) {}
 
+  async getById(channelId: string): Promise<Channel | null> {
+    return this.channelRepository.findOne({
+      where: { id: channelId },
+    });
+  }
+
   /**
    * Получение канала по telegram_chat_id
    */

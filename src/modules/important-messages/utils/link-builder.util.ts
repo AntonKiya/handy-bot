@@ -1,4 +1,17 @@
 /**
+ * Построение ссылки на комментарий в посте канала
+ *
+ * Формат: https://t.me/{channel_username}/{post_id}?comment={comment_id}
+ */
+export function buildCommentLink(
+  channelUsername: string,
+  postMessageId: number,
+  commentMessageId: number,
+): string {
+  return `https://t.me/${channelUsername}/${postMessageId}?comment=${commentMessageId}`;
+}
+
+/**
  * Построение ссылки на сообщение в Telegram
  *
  * Для supergroup: https://t.me/c/{chat_id_без_минуса_и_100}/{message_id}
