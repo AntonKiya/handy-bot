@@ -292,6 +292,14 @@ export class ImportantMessagesFlow {
       return;
     }
 
+    const channel = await this.channelService.getChannelByTelegramChatId(
+      messageData.chatId,
+    );
+
+    if (!channel) {
+      return;
+    }
+
     // Формируем текст и кнопки
     const text = this.buildNotificationText(messageData, categories);
 
@@ -305,7 +313,7 @@ export class ImportantMessagesFlow {
     } else {
       // Формируем ссылку с fallback
       messageLink = buildMessageLink(
-        messageData.chatId,
+        channel.discussion_group_id,
         messageData.messageId,
         messageData.chatType,
         messageData.chatUsername,
