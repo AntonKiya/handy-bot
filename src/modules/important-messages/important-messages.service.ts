@@ -169,6 +169,16 @@ export class ImportantMessagesService {
       return null;
     }
 
+    // НОВОЕ: Пропускаем автофорварды (посты)
+    // Админ и так знает о своем посте, уведомление не нужно
+    const message = ctx.message as any;
+    if (message?.is_automatic_forward === true) {
+      this.logger.debug(
+        `Skipping auto-forward (post) ${messageId} - no notification needed`,
+      );
+      return null;
+    }
+
     const existing = await this.importantMessageRepository.findOne({
       where: {
         channel: { id: channel.id },
