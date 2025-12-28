@@ -7,3 +7,6 @@ docker-compose.yml
 README.md
 uploads
 dist
+
+export-comments.js
+generate-session.js
