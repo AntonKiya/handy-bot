@@ -20,7 +20,8 @@
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "test:int": "jest ./test/core-channel-users.service.int-spec.ts --runInBand",
     "typeorm": "ts-node -r tsconfig-paths/register ./node_modules/typeorm/cli",
-    "typeorm:generate-migration": "npm run typeorm -- -d ./typeorm-migrations.config.ts migration:generate"
+    "typeorm:generate-migration": "npm run typeorm -- -d ./typeorm-migrations.config.ts migration:generate",
+    "typeorm:create-migration": "npm run typeorm migration:create"
   },
   "dependencies": {
     "@google/genai": "^1.30.0",
