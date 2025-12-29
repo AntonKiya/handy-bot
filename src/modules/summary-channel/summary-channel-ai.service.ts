@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { GeminiClient } from '../../ai/gemini.client';
+import { QwenClient } from '../../ai/qwen.clinet';
 
 export type SummaryInputMap = Record<number, string>;
 export type SummaryOutputMap = Record<number, string>;
@@ -8,7 +8,7 @@ export type SummaryOutputMap = Record<number, string>;
 export class SummaryChannelAiService {
   private readonly logger = new Logger(SummaryChannelAiService.name);
 
-  constructor(private readonly geminiClient: GeminiClient) {}
+  constructor(private readonly qwenClient: QwenClient) {}
 
   /**
    * Принимает объект вида { [id]: fullText }, возвращает { [id]: summaryText }.
@@ -26,7 +26,7 @@ export class SummaryChannelAiService {
       `Sending ${ids.length} posts to Gemini for summarization...`,
     );
 
-    const raw = await this.geminiClient.generateText(prompt);
+    const raw = await this.qwenClient.generateText(prompt);
 
     const parsed = this.parseResponse(raw, ids);
     this.logger.debug(
