@@ -2,7 +2,6 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Context } from 'telegraf';
 import { UserStateService } from '../../common/state/user-state.service';
 import { SummaryChannelFlow } from '../../modules/summary-channel/summary-channel.flow';
-// import { SummaryCommentsFlow } from '../../modules/summary-comments/summary-comments.flow';
 import { ImportantMessagesFlow } from '../../modules/important-messages/important-messages.flow';
 import { GroupMessageData } from '../utils/types';
 
@@ -13,7 +12,6 @@ export class MessageRouter {
   constructor(
     private readonly userStateService: UserStateService,
     private readonly summaryChannelFlow: SummaryChannelFlow,
-    // private readonly summaryCommentsFlow: SummaryCommentsFlow,
     private readonly importantMessagesFlow: ImportantMessagesFlow,
   ) {}
 
@@ -84,10 +82,6 @@ export class MessageRouter {
     switch (state.scope) {
       case 'summary:channel':
         return this.summaryChannelFlow.handleState(ctx, text, state);
-
-      // TODO: Summary comments temporary disabled
-      // case 'summary:comments':
-      //   return this.summaryCommentsFlow.handleState(ctx, text, state);
 
       default:
         this.logger.warn(
