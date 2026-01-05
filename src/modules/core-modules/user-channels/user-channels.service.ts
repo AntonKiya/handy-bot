@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { UserChannel } from './user-channel.entity';
+import { UserChannel, UserChannelFeature } from './user-channel.entity';
 import { User } from '../user/user.entity';
 import { Channel } from '../channel/channel.entity';
 
@@ -59,6 +59,35 @@ export class UserChannelsService {
       where: {
         channel: { id: channel.id },
         is_admin: true,
+      },
+      relations: ['user'],
+    });
+
+    return userChannels
+      .map((uc) => uc.user.telegram_user_id)
+      .filter((id) => id != null);
+  }
+
+  /**
+   * Возвращает список админов канала, которые подключили этот канал для конкретной feature.
+   */
+  async getChannelAdminsByTelegramChatIdAndFeature(
+    telegramChatId: number,
+    feature: UserChannelFeature,
+  ): Promise<number[]> {
+    const channel = await this.channelRepository.findOne({
+      where: { telegram_chat_id: telegramChatId },
+    });
+
+    if (!channel) {
+      return [];
+    }
+
+    const userChannels = await this.userChannelRepository.find({
+      where: {
+        channel: { id: channel.id },
+        is_admin: true,
+        feature,
       },
       relations: ['user'],
     });

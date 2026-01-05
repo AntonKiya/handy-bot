@@ -8,6 +8,7 @@ import { ImportantMessagesAction } from './important-messages.callbacks';
 import { UserChannelsService } from '../../core-modules/user-channels/user-channels.service';
 import { buildImportantMessagesNotificationKeyboard } from './important-messages.keyboard';
 import { ChannelService } from '../../core-modules/channel/channel.service';
+import { UserChannelFeature } from '../../core-modules/user-channels/user-channel.entity';
 
 @Injectable()
 export class ImportantMessagesFlow {
@@ -287,8 +288,9 @@ export class ImportantMessagesFlow {
     const channelUsername = channel.username;
 
     const adminIds =
-      await this.userChannelsService.getChannelAdminsByTelegramChatId(
+      await this.userChannelsService.getChannelAdminsByTelegramChatIdAndFeature(
         channel.telegram_chat_id,
+        UserChannelFeature.IMPORTANT_MESSAGES,
       );
 
     if (adminIds.length === 0) {
