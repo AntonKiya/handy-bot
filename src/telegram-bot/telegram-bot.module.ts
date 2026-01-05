@@ -7,7 +7,6 @@ import { ReactionRouter } from './routers/reaction.router';
 import { MenuModule } from '../modules/core-modules/menu/menu.module';
 import { SummaryChannelModule } from '../modules/feature-modules/summary-channel/summary-channel.module';
 import { StateModule } from '../common/state/state.module';
-import { MembershipRouter } from './routers/membership.router';
 import { UserChannelsModule } from '../modules/core-modules/user-channels/user-channels.module';
 import { CoreChannelUsersModule } from '../modules/feature-modules/core-channel-users/core-channel-users.module';
 import { ImportantMessagesModule } from '../modules/feature-modules/important-messages/important-messages.module';
@@ -26,7 +25,6 @@ import { ImportantMessagesModule } from '../modules/feature-modules/important-me
     CommandRouter,
     MessageRouter,
     CallbackRouter,
-    MembershipRouter,
     ReactionRouter,
   ],
 })
