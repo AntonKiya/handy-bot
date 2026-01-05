@@ -1,13 +1,10 @@
-export const IMPORTANT_MESSAGES_NAMESPACE = 'important';
+export const IMPORTANT_MESSAGES_NAMESPACE = 'important-messages';
 
 export enum ImportantMessagesAction {
-  Open = 'open',
-  Done = 'done',
+  DoneAlert = 'done-alert',
 }
 
 export const IMPORTANT_MESSAGES_CB = {
-  open: (messageId: string) =>
-    `${IMPORTANT_MESSAGES_NAMESPACE}:${ImportantMessagesAction.Open}:${messageId}`,
-  done: (messageId: string) =>
-    `${IMPORTANT_MESSAGES_NAMESPACE}:${ImportantMessagesAction.Done}:${messageId}`,
+  doneAlert: (messageId: string) =>
+    `${IMPORTANT_MESSAGES_NAMESPACE}:${ImportantMessagesAction.DoneAlert}:${messageId}`,
 } as const;

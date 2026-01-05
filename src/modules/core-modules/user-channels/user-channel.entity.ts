@@ -28,13 +28,13 @@ export class UserChannel {
   @JoinColumn({ name: 'channel_id' })
   channel: Channel;
 
-  @Column({
-    name: 'feature',
-    type: 'enum',
-    enum: UserChannelFeature,
-    nullable: false,
-  })
-  feature: UserChannelFeature;
+  // @Column({
+  //   name: 'feature',
+  //   type: 'enum',
+  //   enum: UserChannelFeature,
+  //   nullable: false,
+  // })
+  // feature: UserChannelFeature;
 
   @Column({ name: 'is_admin', type: 'boolean', default: false })
   is_admin: boolean;

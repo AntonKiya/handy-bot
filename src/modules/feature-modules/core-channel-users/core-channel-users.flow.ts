@@ -31,15 +31,15 @@ export class CoreChannelUsersFlow {
     const action = parts[1] as CoreChannelUsersAction;
 
     switch (action) {
-      case CoreChannelUsersAction.Open:
+      case CoreChannelUsersAction.OpenMenu:
         return this.showChannelSelectMenu(ctx);
 
-      case CoreChannelUsersAction.Select: {
+      case CoreChannelUsersAction.SelectChannelMenu: {
         const channelId = parts[2];
         return this.handleChannelSelected(ctx, channelId);
       }
 
-      case CoreChannelUsersAction.Back:
+      case CoreChannelUsersAction.BackMenu:
         return this.handleBackToMainMenu(ctx);
 
       default:
@@ -78,7 +78,7 @@ export class CoreChannelUsersFlow {
         [
           Markup.button.callback(
             '⬅ Назад',
-            `${CORE_CHANNEL_USERS_NAMESPACE}:${CoreChannelUsersAction.Back}`,
+            `${CORE_CHANNEL_USERS_NAMESPACE}:${CoreChannelUsersAction.BackMenu}`,
           ),
         ],
       ]);
@@ -101,7 +101,7 @@ export class CoreChannelUsersFlow {
         return [
           Markup.button.callback(
             displayName,
-            `${CORE_CHANNEL_USERS_NAMESPACE}:${CoreChannelUsersAction.Select}:${ch.telegramChatId}`,
+            `${CORE_CHANNEL_USERS_NAMESPACE}:${CoreChannelUsersAction.SelectChannelMenu}:${ch.telegramChatId}`,
           ),
         ];
       });
@@ -109,7 +109,7 @@ export class CoreChannelUsersFlow {
       buttons.push([
         Markup.button.callback(
           '⬅ Назад',
-          `${CORE_CHANNEL_USERS_NAMESPACE}:${CoreChannelUsersAction.Back}`,
+          `${CORE_CHANNEL_USERS_NAMESPACE}:${CoreChannelUsersAction.BackMenu}`,
         ),
       ]);
 

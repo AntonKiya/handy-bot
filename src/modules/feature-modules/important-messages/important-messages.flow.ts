@@ -367,7 +367,7 @@ export class ImportantMessagesFlow {
     const action = parts[1] as ImportantMessagesAction;
 
     switch (action) {
-      case ImportantMessagesAction.Done:
+      case ImportantMessagesAction.DoneAlert:
         return this.handleDoneAction(ctx);
 
       default:

@@ -8,7 +8,7 @@ export function buildImportantMessagesNotificationKeyboard(
   return Markup.inlineKeyboard([
     [
       Markup.button.url('Открыть', messageLink),
-      Markup.button.callback('Готово', IMPORTANT_MESSAGES_CB.done(messageId)),
+      Markup.button.callback('Готово', IMPORTANT_MESSAGES_CB.doneAlert(messageId)),
     ],
   ]);
 }

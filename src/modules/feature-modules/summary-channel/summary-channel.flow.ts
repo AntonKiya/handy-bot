@@ -5,7 +5,10 @@ import {
   SummaryChannelStateResult,
 } from './summary-channel.service';
 import { UserState } from '../../../common/state/user-state.service';
-import { SummaryChannelAction } from './summary-channel.callbacks';
+import {
+  SUMMARY_CHANNEL_CB,
+  SummaryChannelAction,
+} from './summary-channel.callbacks';
 import { MenuService } from '../../core-modules/menu/menu.service';
 import { buildSummaryChannelMenuKeyboard } from './summary-channel.keyboard';
 
@@ -42,37 +45,41 @@ export class SummaryChannelFlow {
         mode: 'added',
         newChannel: result.newChannel,
         channels: result.channels,
-      })
+      });
 
       await this.sendChannelSummaries(ctx, result.newChannel);
     }
   }
 
   /**
-   * Обработчик всех callback’ов вида "summary:channel:*"
+   * Обработчик всех callback’ов вида "summary-channel:*"
    */
   async handleCallback(ctx: Context, data: string) {
     this.logger.debug(
       `SummaryChannel callback received: "${data}" from user ${ctx.from?.id}`,
     );
 
-    const parts = data.split(':'); // ['summary', 'channel', 'open' | 'list' | 'add-new' | 'back']
-    const action = parts[2];
+    const parts = data.split(':'); // ['summary-channel', 'open-menu' | ...]
+    const action = parts[1];
+
+    console.log('data', data);
+    console.log('parts', parts);
+    console.log('action', action);
 
     switch (action) {
-      case SummaryChannelAction.Open:
+      case SummaryChannelAction.OpenMenu:
         return this.showSummaryChannelMenu(ctx);
 
-      case SummaryChannelAction.List:
+      case SummaryChannelAction.ListMenu:
         return this.handleListChannels(ctx);
 
-      case SummaryChannelAction.AddNew:
+      case SummaryChannelAction.AddChannelMenu:
         return this.handleAddChannel(ctx);
 
-      case SummaryChannelAction.Back:
+      case SummaryChannelAction.BackMenu:
         return this.handleBackToMainMenu(ctx);
 
-      case SummaryChannelAction.CancelAdd:
+      case SummaryChannelAction.CancelAddChannelMenu:
         return this.handleCancelAdd(ctx);
 
       default:
@@ -136,8 +143,13 @@ export class SummaryChannelFlow {
     }
 
     const keyboard = Markup.inlineKeyboard([
-      [Markup.button.callback('Добавить канал', 'summary:channel:add-new')],
-      [Markup.button.callback('⬅ Назад', 'summary:channel:open')],
+      [
+        Markup.button.callback(
+          'Добавить канал',
+          SUMMARY_CHANNEL_CB.addChannelMenu,
+        ),
+      ],
+      [Markup.button.callback('⬅ Назад', SUMMARY_CHANNEL_CB.openMenu)],
     ]);
 
     if ('callbackQuery' in ctx && ctx.callbackQuery) {
@@ -186,7 +198,7 @@ export class SummaryChannelFlow {
       await this.summaryChannelService.startAddChannel(userId);
 
     const keyboard = Markup.inlineKeyboard([
-      [Markup.button.callback('⬅ Назад', 'summary:channel:cancel-add')],
+      [Markup.button.callback('⬅ Назад', SUMMARY_CHANNEL_CB.cancelAddMenu)],
     ]);
 
     await ctx.editMessageText(message, {

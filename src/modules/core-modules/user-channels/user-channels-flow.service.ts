@@ -25,14 +25,14 @@ export class UserChannelsFlowService {
     const action = parts[1];
 
     switch (action) {
-      case ChannelsAction.Open:
-      case ChannelsAction.List:
+      case ChannelsAction.OpenMenu:
+      case ChannelsAction.ListMenu:
         return this.showMyChannels(ctx);
 
-      case ChannelsAction.AddNew:
+      case ChannelsAction.AddChannelMenu:
         return this.showAddChannelInstruction(ctx);
 
-      case ChannelsAction.Back:
+      case ChannelsAction.BackMenu:
         return this.handleBackToMainMenu(ctx);
 
       default:
@@ -72,8 +72,8 @@ export class UserChannelsFlowService {
     }
 
     const keyboard = Markup.inlineKeyboard([
-      [Markup.button.callback('Добавить канал', CHANNELS_CB.addNew)],
-      [Markup.button.callback('⬅ Назад', CHANNELS_CB.back)],
+      [Markup.button.callback('Добавить канал', CHANNELS_CB.addChannelMenu)],
+      [Markup.button.callback('⬅ Назад', CHANNELS_CB.backMenu)],
     ]);
 
     if ('callbackQuery' in ctx && ctx.callbackQuery) {
@@ -99,7 +99,7 @@ export class UserChannelsFlowService {
       'Чтобы добавить канал, добавьте этого бота как администратора в нужный канал через настройки Telegram.\n\nПосле этого бот автоматически привяжет канал к вашему аккаунту.\n\nНажмите «Назад», чтобы вернуться в меню.';
 
     const keyboard = Markup.inlineKeyboard([
-      [Markup.button.callback('⬅ Назад', CHANNELS_CB.back)],
+      [Markup.button.callback('⬅ Назад', CHANNELS_CB.backMenu)],
     ]);
 
     await ctx.editMessageText(text, {

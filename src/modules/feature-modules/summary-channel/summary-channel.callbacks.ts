@@ -1,18 +1,19 @@
 // Базовый namespace домена
-export const SUMMARY_CHANNEL_NAMESPACE = 'summary:channel';
+export const SUMMARY_CHANNEL_NAMESPACE = 'summary-channel';
 
-// Действия внутри домена summary:channel
+// Действия внутри домена summary-channel
 export enum SummaryChannelAction {
-  Open = 'open',
-  List = 'list',
-  AddNew = 'add-new',
-  Back = 'back',
-  CancelAdd = 'cancel-add',
+  OpenMenu = 'open-menu',
+  ListMenu = 'list-menu',
+  AddChannelMenu = 'add-channel-menu',
+  CancelAddChannelMenu = 'cancel-add-channel-menu',
+  BackMenu = 'back-menu',
 }
 
 export const SUMMARY_CHANNEL_CB = {
-  open: `${SUMMARY_CHANNEL_NAMESPACE}:${SummaryChannelAction.Open}`,
-  list: `${SUMMARY_CHANNEL_NAMESPACE}:${SummaryChannelAction.List}`,
-  add: `${SUMMARY_CHANNEL_NAMESPACE}:${SummaryChannelAction.AddNew}`,
-  back: `${SUMMARY_CHANNEL_NAMESPACE}:${SummaryChannelAction.Back}`,
+  openMenu: `${SUMMARY_CHANNEL_NAMESPACE}:${SummaryChannelAction.OpenMenu}`,
+  listMenu: `${SUMMARY_CHANNEL_NAMESPACE}:${SummaryChannelAction.ListMenu}`,
+  addChannelMenu: `${SUMMARY_CHANNEL_NAMESPACE}:${SummaryChannelAction.AddChannelMenu}`,
+  cancelAddMenu: `${SUMMARY_CHANNEL_NAMESPACE}:${SummaryChannelAction.CancelAddChannelMenu}`,
+  backMenu: `${SUMMARY_CHANNEL_NAMESPACE}:${SummaryChannelAction.BackMenu}`,
 } as const;
