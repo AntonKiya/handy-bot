@@ -38,7 +38,7 @@ export class SummaryChannelService {
    */
   async startAddChannel(userId: number): Promise<{ message: string }> {
     await this.userStateService.set(userId, {
-      scope: 'summary:channel',
+      scope: 'summary-channel',
       step: 'waiting_for_summary_channel_name',
     });
 

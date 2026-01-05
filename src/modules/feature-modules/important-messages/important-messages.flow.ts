@@ -6,9 +6,18 @@ import { GroupMessageData } from '../../../telegram-bot/utils/types';
 import { buildMessageLink, buildCommentLink } from './utils/link-builder.util';
 import { ImportantMessagesAction } from './important-messages.callbacks';
 import { UserChannelsService } from '../../core-modules/user-channels/user-channels.service';
-import { buildImportantMessagesNotificationKeyboard } from './important-messages.keyboard';
+import {
+  buildImportantMessagesNotificationKeyboard,
+  buildImportantMessagesMenuKeyboard,
+  buildImportantMessagesAddChannelKeyboard,
+} from './important-messages.keyboard';
 import { ChannelService } from '../../core-modules/channel/channel.service';
 import { UserChannelFeature } from '../../core-modules/user-channels/user-channel.entity';
+import { MenuService } from '../../core-modules/menu/menu.service';
+import {
+  UserState,
+  UserStateService,
+} from '../../../common/state/user-state.service';
 
 @Injectable()
 export class ImportantMessagesFlow {
@@ -18,7 +27,68 @@ export class ImportantMessagesFlow {
     private readonly importantMessagesService: ImportantMessagesService,
     private readonly userChannelsService: UserChannelsService,
     private readonly channelService: ChannelService,
+    private readonly menuService: MenuService,
+    private readonly userStateService: UserStateService,
   ) {}
+
+  /**
+   * Публичный метод, который вызывается из TextRouter.
+   * Flow сам не меняет state и не выполняет бизнес-логику —
+   * он просто делегирует работу доменному сервису.
+   */
+  async handleState(ctx: Context, text: string, state: UserState) {
+    const telegramUserId = ctx.from?.id;
+    if (!telegramUserId) {
+      this.logger.warn('handleState called without telegramUserId');
+      return;
+    }
+
+    if (state.scope !== 'important-messages') {
+      return;
+    }
+
+    if (state.step !== 'waiting_for_important_messages_channel_name') {
+      return;
+    }
+
+    const channelUsernameWithAt = this.normalizeChannelUsername(text);
+
+    const result =
+      await this.userChannelsService.attachChannelToUserFeatureByUsername(
+        telegramUserId,
+        channelUsernameWithAt,
+        UserChannelFeature.IMPORTANT_MESSAGES,
+      );
+
+    if (result.type === 'channel-not-found') {
+      await ctx.reply(
+        `Канал ${channelUsernameWithAt} не найден в системе.\n\n` +
+          `Добавьте бота как администратора в этот канал и убедитесь, что у канала есть дискуссионная группа.\n` +
+          `Затем попробуйте снова.`,
+      );
+      return;
+    }
+
+    if (result.type === 'already-exists') {
+      await ctx.reply(
+        `Канал ${channelUsernameWithAt} уже подключён к important-messages.`,
+      );
+      await this.userStateService.clear(telegramUserId);
+      await this.showImportantMessagesMenu(ctx);
+      return;
+    }
+
+    if (result.type === 'added') {
+      await ctx.reply(
+        `✅ Канал ${channelUsernameWithAt} подключён к important-messages.`,
+      );
+      await this.userStateService.clear(telegramUserId);
+      await this.showImportantMessagesMenu(ctx);
+      return;
+    }
+
+    await ctx.reply('Не удалось подключить канал. Попробуйте позже.');
+  }
 
   /**
    * Обработка входящего сообщения из группы
@@ -372,10 +442,155 @@ export class ImportantMessagesFlow {
       case ImportantMessagesAction.DoneAlert:
         return this.handleDoneAction(ctx);
 
+      case ImportantMessagesAction.OpenMenu:
+        return this.showImportantMessagesMenu(ctx);
+
+      case ImportantMessagesAction.ListMenu:
+        return this.showMyChannels(ctx);
+
+      case ImportantMessagesAction.AddChannelMenu:
+        return this.startAddChannel(ctx);
+
+      case ImportantMessagesAction.CancelAddChannelMenu:
+        return this.handleCancelAddChannel(ctx);
+
+      case ImportantMessagesAction.VerifyMenu:
+        return this.handleVerify(ctx);
+
+      case ImportantMessagesAction.BackMenu:
+        return this.handleBackToMainMenu(ctx);
+
       default:
         if ('answerCbQuery' in ctx && typeof ctx.answerCbQuery === 'function') {
           await ctx.answerCbQuery();
         }
+    }
+  }
+
+  private async showImportantMessagesMenu(ctx: Context) {
+    const text = 'Важные сообщения — меню';
+
+    const keyboard = buildImportantMessagesMenuKeyboard();
+
+    if ('callbackQuery' in ctx && ctx.callbackQuery) {
+      await ctx.editMessageText(text, { ...keyboard });
+    } else {
+      await ctx.reply(text, { ...keyboard });
+    }
+
+    if ('answerCbQuery' in ctx && typeof ctx.answerCbQuery === 'function') {
+      await ctx.answerCbQuery();
+    }
+  }
+
+  private async showMyChannels(ctx: Context) {
+    const userId = ctx.from?.id;
+    if (!userId) {
+      this.logger.warn('showMyChannels called without userId');
+      return;
+    }
+
+    const channels = await this.userChannelsService.getChannelsForUserByFeature(
+      userId,
+      UserChannelFeature.IMPORTANT_MESSAGES,
+    );
+
+    let text: string;
+    if (!channels.length) {
+      text = 'У вас пока нет каналов, подключённых к important-messages.';
+    } else {
+      text =
+        'Ваши каналы для important-messages:\n\n' +
+        channels
+          .map((ch) =>
+            ch.username ? `• @${ch.username}` : `• ID: ${ch.telegramChatId}`,
+          )
+          .join('\n');
+    }
+
+    const keyboard = buildImportantMessagesMenuKeyboard();
+
+    if ('callbackQuery' in ctx && ctx.callbackQuery) {
+      await ctx.editMessageText(text, { ...keyboard });
+    } else {
+      await ctx.reply(text, { ...keyboard });
+    }
+
+    if ('answerCbQuery' in ctx && typeof ctx.answerCbQuery === 'function') {
+      await ctx.answerCbQuery();
+    }
+  }
+
+  private async startAddChannel(ctx: Context) {
+    const userId = ctx.from?.id;
+    if (!userId) {
+      this.logger.warn('startAddChannel called without userId');
+      return;
+    }
+
+    await this.userStateService.set(userId, {
+      scope: 'important-messages',
+      step: 'waiting_for_important_messages_channel_name',
+    });
+
+    const text =
+      'Отправьте @username канала, который хотите подключить к important-messages.\n\n' +
+      'Важно: бот должен быть добавлен администратором в канал и у канала должна быть включена дискуссионная группа.';
+
+    const keyboard = buildImportantMessagesAddChannelKeyboard();
+
+    if ('callbackQuery' in ctx && ctx.callbackQuery) {
+      await ctx.editMessageText(text, { ...keyboard });
+    } else {
+      await ctx.reply(text, { ...keyboard });
+    }
+
+    if ('answerCbQuery' in ctx && typeof ctx.answerCbQuery === 'function') {
+      await ctx.answerCbQuery();
+    }
+  }
+
+  private async handleCancelAddChannel(ctx: Context) {
+    const userId = ctx.from?.id;
+    if (!userId) {
+      this.logger.warn('handleCancelAddChannel called without userId');
+      return;
+    }
+
+    await this.userStateService.clear(userId);
+
+    await this.showImportantMessagesMenu(ctx);
+
+    if ('answerCbQuery' in ctx && typeof ctx.answerCbQuery === 'function') {
+      await ctx.answerCbQuery();
+    }
+  }
+
+  private async handleVerify(ctx: Context) {
+    // TODO: Здесь будет проверка что бот админ в канале и в дискуссионной группе канала.
+
+    const text =
+      'Проверка подключения пока не реализована.\n\n' +
+      'Следующим шагом добавим проверку прав бота и дискуссионной группы.';
+
+    const keyboard = buildImportantMessagesMenuKeyboard();
+
+    if ('callbackQuery' in ctx && ctx.callbackQuery) {
+      await ctx.editMessageText(text, { ...keyboard });
+    } else {
+      await ctx.reply(text, { ...keyboard });
+    }
+
+    if ('answerCbQuery' in ctx && typeof ctx.answerCbQuery === 'function') {
+      await ctx.answerCbQuery();
+    }
+  }
+
+  private async handleBackToMainMenu(ctx: Context) {
+    await this.menuService.redrawMainMenu(ctx);
+
+    if ('answerCbQuery' in ctx && typeof ctx.answerCbQuery === 'function') {
+      await ctx.answerCbQuery();
     }
   }
 
@@ -401,5 +616,11 @@ export class ImportantMessagesFlow {
         await ctx.answerCbQuery('Ошибка');
       }
     }
+  }
+
+  private normalizeChannelUsername(input: string): string {
+    const raw = (input ?? '').trim();
+    if (!raw) return raw;
+    return raw.startsWith('@') ? raw : `@${raw}`;
   }
 }

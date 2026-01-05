@@ -80,8 +80,11 @@ export class MessageRouter {
     }
 
     switch (state.scope) {
-      case 'summary:channel':
+      case 'summary-channel':
         return this.summaryChannelFlow.handleState(ctx, text, state);
+
+      case 'important-messages':
+        return this.importantMessagesFlow.handleState(ctx, text, state);
 
       default:
         this.logger.warn(

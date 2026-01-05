@@ -1,8 +1,10 @@
 import { Injectable } from '@nestjs/common';
 
-export type UserStateScope = 'summary:channel';
+export type UserStateScope = 'summary-channel' | 'important-messages';
 
-export type UserStateStep = 'waiting_for_summary_channel_name';
+export type UserStateStep =
+  | 'waiting_for_summary_channel_name'
+  | 'waiting_for_important_messages_channel_name';
 
 export interface UserState {
   scope: UserStateScope;
