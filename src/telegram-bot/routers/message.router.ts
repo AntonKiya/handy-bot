@@ -1,8 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Context } from 'telegraf';
 import { UserStateService } from '../../common/state/user-state.service';
-import { SummaryChannelFlow } from '../../modules/summary-channel/summary-channel.flow';
-import { ImportantMessagesFlow } from '../../modules/important-messages/important-messages.flow';
+import { SummaryChannelFlow } from '../../modules/feature-modules/summary-channel/summary-channel.flow';
+import { ImportantMessagesFlow } from '../../modules/feature-modules/important-messages/important-messages.flow';
 import { GroupMessageData } from '../utils/types';
 
 @Injectable()

@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Context } from 'telegraf';
 import { Update } from 'telegraf/types';
-import { ImportantMessagesFlow } from '../../modules/important-messages/important-messages.flow';
+import { ImportantMessagesFlow } from '../../modules/feature-modules/important-messages/important-messages.flow';
 
 @Injectable()
 export class ReactionRouter {

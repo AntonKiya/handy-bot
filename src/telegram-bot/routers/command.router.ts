@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { Context } from 'telegraf';
-import { MenuService } from '../../modules/menu/menu.service';
+import { MenuService } from '../../modules/core-modules/menu/menu.service';
 
 @Injectable()
 export class CommandRouter {

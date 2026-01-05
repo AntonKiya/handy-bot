@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { Context } from 'telegraf';
-import { UserChannelsFlowService } from '../../modules/user-channels/user-channels-flow.service';
+import { UserChannelsFlowService } from '../../modules/core-modules/user-channels/user-channels-flow.service';
 
 @Injectable()
 export class MembershipRouter {

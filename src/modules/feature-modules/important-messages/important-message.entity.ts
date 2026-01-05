@@ -7,7 +7,7 @@ import {
   CreateDateColumn,
   Index,
 } from 'typeorm';
-import { Channel } from '../channel/channel.entity';
+import { Channel } from '../../core-modules/channel/channel.entity';
 
 @Entity('important_messages')
 @Index(

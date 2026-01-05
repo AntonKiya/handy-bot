@@ -1,5 +1,5 @@
 import { Entity, PrimaryColumn, Column, OneToOne, JoinColumn } from 'typeorm';
-import { ChannelPost } from '../channel-posts/channel-post.entity';
+import { ChannelPost } from '../../core-modules/channel-posts/channel-post.entity';
 
 @Entity('core_channel_users_post_comments_sync')
 export class CoreChannelUsersPostCommentsSync {

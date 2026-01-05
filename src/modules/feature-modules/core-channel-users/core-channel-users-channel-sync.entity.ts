@@ -1,5 +1,5 @@
 import { Entity, PrimaryColumn, Column, OneToOne, JoinColumn } from 'typeorm';
-import { Channel } from '../channel/channel.entity';
+import { Channel } from '../../core-modules/channel/channel.entity';
 
 @Entity('core_channel_users_channel_sync')
 export class CoreChannelUsersChannelSync {

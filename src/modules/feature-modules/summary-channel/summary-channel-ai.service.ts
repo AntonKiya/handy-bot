@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { QwenClient } from '../../ai/qwen.clinet';
+import { QwenClient } from '../../../ai/qwen.clinet';
 
 export type SummaryInputMap = Record<number, string>;
 export type SummaryOutputMap = Record<number, string>;

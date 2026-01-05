@@ -1,13 +1,13 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Context } from 'telegraf';
-import { SummaryChannelFlow } from '../../modules/summary-channel/summary-channel.flow';
-import { SUMMARY_CHANNEL_NAMESPACE } from '../../modules/summary-channel/summary-channel.callbacks';
-import { UserChannelsFlowService } from '../../modules/user-channels/user-channels-flow.service';
-import { CHANNELS_NAMESPACE } from '../../modules/user-channels/user-channels.callbacks';
-import { CORE_CHANNEL_USERS_NAMESPACE } from '../../modules/core-channel-users/core-channel-users.callbacks';
-import { CoreChannelUsersFlow } from '../../modules/core-channel-users/core-channel-users.flow';
-import { ImportantMessagesFlow } from '../../modules/important-messages/important-messages.flow';
-import { IMPORTANT_MESSAGES_NAMESPACE } from '../../modules/important-messages/important-messages.callbacks';
+import { SummaryChannelFlow } from '../../modules/feature-modules/summary-channel/summary-channel.flow';
+import { SUMMARY_CHANNEL_NAMESPACE } from '../../modules/feature-modules/summary-channel/summary-channel.callbacks';
+import { UserChannelsFlowService } from '../../modules/core-modules/user-channels/user-channels-flow.service';
+import { CHANNELS_NAMESPACE } from '../../modules/core-modules/user-channels/user-channels.callbacks';
+import { CORE_CHANNEL_USERS_NAMESPACE } from '../../modules/feature-modules/core-channel-users/core-channel-users.callbacks';
+import { CoreChannelUsersFlow } from '../../modules/feature-modules/core-channel-users/core-channel-users.flow';
+import { ImportantMessagesFlow } from '../../modules/feature-modules/important-messages/important-messages.flow';
+import { IMPORTANT_MESSAGES_NAMESPACE } from '../../modules/feature-modules/important-messages/important-messages.callbacks';
 
 @Injectable()
 export class CallbackRouter {

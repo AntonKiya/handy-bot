@@ -2,7 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ImportantMessage } from './important-message.entity';
 import { DictionaryWord } from './dictionary-word.entity';
-import { Channel } from '../channel/channel.entity';
+import { Channel } from '../../core-modules/channel/channel.entity';
 import { DictionaryService } from './dictionary.service';
 import { CategorizationService } from './categorization.service';
 import { ImportantMessagesService } from './important-messages.service';
@@ -11,8 +11,8 @@ import { QuestionScorer } from './utils/scorers/question.scorer';
 import { LeadScorer } from './utils/scorers/lead.scorer';
 import { NegativeScorer } from './utils/scorers/negative.scorer';
 import { HypeScorer } from './utils/scorers/hype.scorer';
-import { UserChannelsModule } from '../user-channels/user-channels.module';
-import { ChannelModule } from '../channel/channel.module';
+import { UserChannelsModule } from '../../core-modules/user-channels/user-channels.module';
+import { ChannelModule } from '../../core-modules/channel/channel.module';
 
 @Module({
   imports: [

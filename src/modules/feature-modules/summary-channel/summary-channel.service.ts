@@ -3,7 +3,7 @@ import * as cheerio from 'cheerio';
 import {
   UserState,
   UserStateService,
-} from '../../common/state/user-state.service';
+} from '../../../common/state/user-state.service';
 import {
   SummaryChannelAiService,
   SummaryInputMap,

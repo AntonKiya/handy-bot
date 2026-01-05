@@ -3,15 +3,15 @@ import { getRepositoryToken, TypeOrmModule } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { PostgreSqlContainer } from '@testcontainers/postgresql';
 
-import { CoreChannelUsersService } from '../src/modules/core-channel-users/core-channel-users.service';
-import { Channel } from '../src/modules/channel/channel.entity';
-import { ChannelPost } from '../src/modules/channel-posts/channel-post.entity';
+import { CoreChannelUsersService } from '../src/modules/feature-modules/core-channel-users/core-channel-users.service';
+import { Channel } from '../src/modules/core-modules/channel/channel.entity';
+import { ChannelPost } from '../src/modules/core-modules/channel-posts/channel-post.entity';
 import {
   CoreChannelUsersComment,
   CoreCommentAuthorType,
-} from '../src/modules/core-channel-users/core-channel-users-comment.entity';
-import { CoreChannelUsersPostCommentsSync } from '../src/modules/core-channel-users/core-channel-users-post-comments-sync.entity';
-import { CoreChannelUsersChannelSync } from '../src/modules/core-channel-users/core-channel-users-channel-sync.entity';
+} from '../src/modules/feature-modules/core-channel-users/core-channel-users-comment.entity';
+import { CoreChannelUsersPostCommentsSync } from '../src/modules/feature-modules/core-channel-users/core-channel-users-post-comments-sync.entity';
+import { CoreChannelUsersChannelSync } from '../src/modules/feature-modules/core-channel-users/core-channel-users-channel-sync.entity';
 import { User } from '../src/modules/user/user.entity';
 import { TelegramCoreService } from '../src/telegram-core/telegram-core.service';
 import { Api } from 'telegram';
@@ -22,7 +22,7 @@ import {
   MS_PER_DAY,
   SYNC_COOLDOWN_DAYS,
   SYNC_WINDOW_DAYS,
-} from '../src/modules/core-channel-users/core-channel-users.constants';
+} from '../src/modules/feature-modules/core-channel-users/core-channel-users.constants';
 
 // ----- Константы для тестов -----
 

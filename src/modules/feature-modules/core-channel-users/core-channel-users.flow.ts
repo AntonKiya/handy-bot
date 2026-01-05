@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Context, Markup } from 'telegraf';
-import { MenuService } from '../menu/menu.service';
-import { UserChannelsService } from '../user-channels/user-channels.service';
+import { MenuService } from '../../core-modules/menu/menu.service';
+import { UserChannelsService } from '../../core-modules/user-channels/user-channels.service';
 import {
   CORE_CHANNEL_USERS_NAMESPACE,
   CoreChannelUsersAction,

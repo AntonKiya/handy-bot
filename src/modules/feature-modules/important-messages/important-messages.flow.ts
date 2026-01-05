@@ -2,12 +2,12 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Context } from 'telegraf';
 import { ReactionType } from 'telegraf/types';
 import { ImportantMessagesService } from './important-messages.service';
-import { GroupMessageData } from '../../telegram-bot/utils/types';
+import { GroupMessageData } from '../../../telegram-bot/utils/types';
 import { buildMessageLink, buildCommentLink } from './utils/link-builder.util';
 import { ImportantMessagesAction } from './important-messages.callbacks';
-import { UserChannelsService } from '../user-channels/user-channels.service';
+import { UserChannelsService } from '../../core-modules/user-channels/user-channels.service';
 import { buildImportantMessagesNotificationKeyboard } from './important-messages.keyboard';
-import { ChannelService } from '../channel/channel.service';
+import { ChannelService } from '../../core-modules/channel/channel.service';
 
 @Injectable()
 export class ImportantMessagesFlow {

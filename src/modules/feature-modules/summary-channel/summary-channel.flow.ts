@@ -4,9 +4,9 @@ import {
   SummaryChannelService,
   SummaryChannelStateResult,
 } from './summary-channel.service';
-import { UserState } from '../../common/state/user-state.service';
+import { UserState } from '../../../common/state/user-state.service';
 import { SummaryChannelAction } from './summary-channel.callbacks';
-import { MenuService } from '../menu/menu.service';
+import { MenuService } from '../../core-modules/menu/menu.service';
 import { buildSummaryChannelMenuKeyboard } from './summary-channel.keyboard';
 
 @Injectable()
@@ -42,7 +42,7 @@ export class SummaryChannelFlow {
         mode: 'added',
         newChannel: result.newChannel,
         channels: result.channels,
-      });
+      })
 
       await this.sendChannelSummaries(ctx, result.newChannel);
     }

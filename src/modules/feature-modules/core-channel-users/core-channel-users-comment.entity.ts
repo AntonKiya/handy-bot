@@ -6,8 +6,8 @@ import {
   JoinColumn,
   Index,
 } from 'typeorm';
-import { ChannelPost } from '../channel-posts/channel-post.entity';
-import { User } from '../user/user.entity';
+import { ChannelPost } from '../../core-modules/channel-posts/channel-post.entity';
+import { User } from '../../core-modules/user/user.entity';
 
 export type CoreCommentAuthorType = 'user' | 'channel' | 'chat';
 

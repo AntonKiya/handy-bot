@@ -6,7 +6,7 @@ import {
   JoinColumn,
   CreateDateColumn,
 } from 'typeorm';
-import { Channel } from '../channel/channel.entity';
+import { Channel } from '../../core-modules/channel/channel.entity';
 
 @Entity('dictionary_words')
 export class DictionaryWord {

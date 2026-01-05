@@ -1,16 +1,16 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, EntityManager, In } from 'typeorm';
-import { Channel } from '../channel/channel.entity';
-import { ChannelPost } from '../channel-posts/channel-post.entity';
+import { Channel } from '../../core-modules/channel/channel.entity';
+import { ChannelPost } from '../../core-modules/channel-posts/channel-post.entity';
 import {
   CoreChannelUsersComment,
   CoreCommentAuthorType,
 } from './core-channel-users-comment.entity';
 import { CoreChannelUsersPostCommentsSync } from './core-channel-users-post-comments-sync.entity';
 import { CoreChannelUsersChannelSync } from './core-channel-users-channel-sync.entity';
-import { User } from '../user/user.entity';
-import { TelegramCoreService } from '../../telegram-core/telegram-core.service';
+import { User } from '../../core-modules/user/user.entity';
+import { TelegramCoreService } from '../../../telegram-core/telegram-core.service';
 import { Api } from 'telegram';
 import {
   SYNC_WINDOW_DAYS,

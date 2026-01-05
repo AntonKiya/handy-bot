@@ -5,10 +5,10 @@ import { Context } from 'telegraf';
 import { ReactionType } from 'telegraf/types';
 import { ImportantMessage } from './important-message.entity';
 import { CategorizationService } from './categorization.service';
-import { GroupMessageData } from '../../telegram-bot/utils/types';
+import { GroupMessageData } from '../../../telegram-bot/utils/types';
 import { getWordCount } from './utils/text-normalizer.util';
 import { MIN_WORD_COUNT, THRESHOLDS } from './important-messages.constants';
-import { ChannelService } from '../channel/channel.service';
+import { ChannelService } from '../../core-modules/channel/channel.service';
 import { HypeScorer } from './utils/scorers/hype.scorer';
 
 @Injectable()

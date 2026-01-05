@@ -1,10 +1,10 @@
 import { Markup } from 'telegraf';
-import { SUMMARY_CHANNEL_CB } from '../summary-channel/summary-channel.callbacks';
+import { SUMMARY_CHANNEL_CB } from '../../feature-modules/summary-channel/summary-channel.callbacks';
 import { CHANNELS_CB } from '../user-channels/user-channels.callbacks';
 import {
   CORE_CHANNEL_USERS_NAMESPACE,
   CoreChannelUsersAction,
-} from '../core-channel-users/core-channel-users.callbacks';
+} from '../../feature-modules/core-channel-users/core-channel-users.callbacks';
 
 export function buildMainMenuKeyboard() {
   return Markup.inlineKeyboard([
