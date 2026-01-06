@@ -12,6 +12,15 @@ export type TelegramAccessResult =
   | { ok: true }
   | { ok: false; error: TelegramAccessError; details?: string };
 
+export type TelegramResolveChannelResult =
+  | {
+      ok: true;
+      channelChatId: number;
+      discussionGroupChatId: number | null;
+      username: string | null;
+    }
+  | { ok: false; error: TelegramAccessError; details?: string };
+
 @Injectable()
 export class TelegramAccessVerifierService {
   private botId: number | null = null;
@@ -28,6 +37,50 @@ export class TelegramAccessVerifierService {
 
   private isAdminStatus(status?: string): boolean {
     return status === 'administrator' || status === 'creator';
+  }
+
+  /**
+   * Резолвим канал по @username через Bot API.
+   * Используем getChat чтобы получить chat_id и linked_chat_id (discussion group).
+   */
+  async resolveChannelByUsername(
+    telegram: Context['telegram'],
+    channelUsernameWithAt: string,
+  ): Promise<TelegramResolveChannelResult> {
+    try {
+      const chat = (await telegram.getChat(channelUsernameWithAt)) as any;
+
+      if (!chat) {
+        return {
+          ok: false,
+          error: 'TELEGRAM_API_ERROR',
+          details: 'Chat not found',
+        };
+      }
+
+      if (chat.type !== 'channel') {
+        return {
+          ok: false,
+          error: 'TELEGRAM_API_ERROR',
+          details: 'Chat is not a channel',
+        };
+      }
+
+      return {
+        ok: true,
+        channelChatId: Number(chat.id),
+        discussionGroupChatId: chat.linked_chat_id
+          ? Number(chat.linked_chat_id)
+          : null,
+        username: chat.username ?? null,
+      };
+    } catch (e: any) {
+      return {
+        ok: false,
+        error: 'TELEGRAM_API_ERROR',
+        details: e?.message,
+      };
+    }
   }
 
   async verifyBotIsAdminInChannel(

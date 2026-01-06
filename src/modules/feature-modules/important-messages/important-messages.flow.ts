@@ -55,20 +55,21 @@ export class ImportantMessagesFlow {
 
     const channelUsernameWithAt = this.normalizeChannelUsername(text);
 
-    const channel = await this.channelService.getChannelByUsername(
+    const resolved = await this.telegramAccessVerifier.resolveChannelByUsername(
+      ctx.telegram,
       channelUsernameWithAt,
     );
 
-    if (!channel) {
+    if (!resolved.ok) {
       await ctx.reply(
-        `Канал ${channelUsernameWithAt} не найден в системе.\n\n` +
+        `Канал ${channelUsernameWithAt} не найден в Telegram или бот не имеет доступа.\n\n` +
           `Добавьте бота как администратора в этот канал и убедитесь, что у канала есть дискуссионная группа.\n` +
           `Затем попробуйте снова.`,
       );
       return;
     }
 
-    const channelChatId = Number(channel.telegram_chat_id);
+    const channelChatId = resolved.channelChatId;
 
     const botAdminInChannel =
       await this.telegramAccessVerifier.verifyBotIsAdminInChannel(
@@ -86,7 +87,7 @@ export class ImportantMessagesFlow {
 
     const hasDiscussionGroup =
       this.telegramAccessVerifier.verifyChannelHasDiscussionGroup(
-        (channel as any).discussion_group_id,
+        resolved.discussionGroupChatId,
       );
 
     if (!hasDiscussionGroup.ok) {
@@ -97,7 +98,7 @@ export class ImportantMessagesFlow {
       return;
     }
 
-    const discussionGroupChatId = Number((channel as any).discussion_group_id);
+    const discussionGroupChatId = Number(resolved.discussionGroupChatId);
 
     const botAdminInDiscussionGroup =
       await this.telegramAccessVerifier.verifyBotIsAdminInDiscussionGroup(
@@ -128,11 +129,19 @@ export class ImportantMessagesFlow {
       return;
     }
 
+    // Сценарий A: после всех проверок сохраняем/обновляем канал в БД
+    await this.channelService.upsertChannelFromTelegram({
+      telegramChatId: channelChatId,
+      username: resolved.username,
+      discussionGroupChatId: resolved.discussionGroupChatId,
+    });
+
     const result =
       await this.userChannelsService.attachChannelToUserFeatureByUsername(
         telegramUserId,
         channelUsernameWithAt,
         UserChannelFeature.IMPORTANT_MESSAGES,
+        userAdminInChannel.ok,
       );
 
     if (result.type === 'channel-not-found') {
@@ -455,7 +464,7 @@ export class ImportantMessagesFlow {
     // Формируем текст и кнопки
     const text = this.buildNotificationText(messageData, categories);
 
-    let messageLink = '';
+    let messageLink: string;
     if (channelUsername && postMessageId) {
       messageLink = buildCommentLink(
         channelUsername,
@@ -525,27 +534,38 @@ export class ImportantMessagesFlow {
         return this.handleDoneAction(ctx);
 
       case ImportantMessagesAction.OpenMenu:
-        return this.showImportantMessagesMenu(ctx);
+        await this.showImportantMessagesMenu(ctx);
+        break;
 
       case ImportantMessagesAction.ListMenu:
-        return this.showMyChannels(ctx);
+        await this.showMyChannels(ctx);
+        break;
 
       case ImportantMessagesAction.AddChannelMenu:
-        return this.startAddChannel(ctx);
+        await this.startAddChannel(ctx);
+        break;
 
       case ImportantMessagesAction.CancelAddChannelMenu:
-        return this.handleCancelAddChannel(ctx);
+        await this.handleCancelAddChannel(ctx);
+        break;
 
       case ImportantMessagesAction.VerifyMenu:
-        return this.handleVerify(ctx);
+        await this.handleVerify(ctx);
+        break;
 
       case ImportantMessagesAction.BackMenu:
-        return this.handleBackToMainMenu(ctx);
+        await this.handleBackToMainMenu(ctx);
+        break;
 
       default:
         if ('answerCbQuery' in ctx && typeof ctx.answerCbQuery === 'function') {
           await ctx.answerCbQuery();
         }
+        return;
+    }
+
+    if ('answerCbQuery' in ctx && typeof ctx.answerCbQuery === 'function') {
+      await ctx.answerCbQuery();
     }
   }
 
@@ -558,10 +578,6 @@ export class ImportantMessagesFlow {
       await ctx.editMessageText(text, { ...keyboard });
     } else {
       await ctx.reply(text, { ...keyboard });
-    }
-
-    if ('answerCbQuery' in ctx && typeof ctx.answerCbQuery === 'function') {
-      await ctx.answerCbQuery();
     }
   }
 
@@ -597,10 +613,6 @@ export class ImportantMessagesFlow {
     } else {
       await ctx.reply(text, { ...keyboard });
     }
-
-    if ('answerCbQuery' in ctx && typeof ctx.answerCbQuery === 'function') {
-      await ctx.answerCbQuery();
-    }
   }
 
   private async startAddChannel(ctx: Context) {
@@ -626,10 +638,6 @@ export class ImportantMessagesFlow {
     } else {
       await ctx.reply(text, { ...keyboard });
     }
-
-    if ('answerCbQuery' in ctx && typeof ctx.answerCbQuery === 'function') {
-      await ctx.answerCbQuery();
-    }
   }
 
   private async handleCancelAddChannel(ctx: Context) {
@@ -642,10 +650,6 @@ export class ImportantMessagesFlow {
     await this.userStateService.clear(userId);
 
     await this.showImportantMessagesMenu(ctx);
-
-    if ('answerCbQuery' in ctx && typeof ctx.answerCbQuery === 'function') {
-      await ctx.answerCbQuery();
-    }
   }
 
   private async handleVerify(ctx: Context) {
@@ -662,18 +666,10 @@ export class ImportantMessagesFlow {
     } else {
       await ctx.reply(text, { ...keyboard });
     }
-
-    if ('answerCbQuery' in ctx && typeof ctx.answerCbQuery === 'function') {
-      await ctx.answerCbQuery();
-    }
   }
 
   private async handleBackToMainMenu(ctx: Context) {
     await this.menuService.redrawMainMenu(ctx);
-
-    if ('answerCbQuery' in ctx && typeof ctx.answerCbQuery === 'function') {
-      await ctx.answerCbQuery();
-    }
   }
 
   /**

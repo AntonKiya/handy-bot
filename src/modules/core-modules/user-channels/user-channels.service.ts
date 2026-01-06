@@ -130,6 +130,7 @@ export class UserChannelsService {
     telegramUserId: number,
     channelUsernameWithAt: string,
     feature: UserChannelFeature,
+    isAdmin: boolean = false,
   ): Promise<
     | { type: 'user-not-found' }
     | { type: 'channel-not-found' }
@@ -162,6 +163,14 @@ export class UserChannelsService {
     });
 
     if (existing) {
+      // Если мы точно знаем, что пользователь админ — фиксируем это в связке (не понижаем обратно)
+      if (isAdmin && existing.is_admin !== true) {
+        await this.userChannelRepository.update(
+          { id: existing.id },
+          { is_admin: true },
+        );
+      }
+
       return { type: 'already-exists' };
     }
 
@@ -169,8 +178,7 @@ export class UserChannelsService {
       user: { id: user.id } as any,
       channel: { id: channel.id } as any,
       feature,
-      // is_admin ставим false по умолчанию, обновим при verify/check (следующий шаг)
-      is_admin: false,
+      is_admin: isAdmin,
     });
 
     await this.userChannelRepository.save(entity);
