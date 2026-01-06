@@ -1,4 +1,4 @@
-export const IMPORTANT_MESSAGES_NAMESPACE = 'important-messages';
+export const IMPORTANT_MESSAGES_NAMESPACE = 'important-msg';
 
 export enum ImportantMessagesAction {
   // Menu
