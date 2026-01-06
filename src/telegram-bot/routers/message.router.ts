@@ -4,6 +4,7 @@ import { UserStateService } from '../../common/state/user-state.service';
 import { SummaryChannelFlow } from '../../modules/feature-modules/summary-channel/summary-channel.flow';
 import { ImportantMessagesFlow } from '../../modules/feature-modules/important-messages/important-messages.flow';
 import { GroupMessageData } from '../utils/types';
+import { UserService } from '../../modules/core-modules/user/user.service';
 
 @Injectable()
 export class MessageRouter {
@@ -13,6 +14,7 @@ export class MessageRouter {
     private readonly userStateService: UserStateService,
     private readonly summaryChannelFlow: SummaryChannelFlow,
     private readonly importantMessagesFlow: ImportantMessagesFlow,
+    private readonly userService: UserService,
   ) {}
 
   async route(ctx: Context) {
@@ -65,6 +67,11 @@ export class MessageRouter {
     userId: number,
     text: string,
   ) {
+    await this.userService.upsertTelegramUser(
+      userId,
+      ctx.from?.username ?? null,
+    );
+
     if (!text) {
       this.logger.debug(`No text in private message from user ${userId}`);
       return;

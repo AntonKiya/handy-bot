@@ -13,12 +13,16 @@ import { NegativeScorer } from './utils/scorers/negative.scorer';
 import { HypeScorer } from './utils/scorers/hype.scorer';
 import { UserChannelsModule } from '../../core-modules/user-channels/user-channels.module';
 import { ChannelModule } from '../../core-modules/channel/channel.module';
+import { MenuModule } from '../../core-modules/menu/menu.module';
+import { StateModule } from '../../../common/state/state.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([ImportantMessage, DictionaryWord, Channel]),
     UserChannelsModule,
     ChannelModule,
+    StateModule,
+    MenuModule,
   ],
   providers: [
     // Services

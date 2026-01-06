@@ -8,6 +8,7 @@ import { CORE_CHANNEL_USERS_NAMESPACE } from '../../modules/feature-modules/core
 import { CoreChannelUsersFlow } from '../../modules/feature-modules/core-channel-users/core-channel-users.flow';
 import { ImportantMessagesFlow } from '../../modules/feature-modules/important-messages/important-messages.flow';
 import { IMPORTANT_MESSAGES_NAMESPACE } from '../../modules/feature-modules/important-messages/important-messages.callbacks';
+import { UserService } from '../../modules/core-modules/user/user.service';
 
 @Injectable()
 export class CallbackRouter {
@@ -18,9 +19,18 @@ export class CallbackRouter {
     private readonly userChannelsFlow: UserChannelsFlowService,
     private readonly coreChannelUsersFlow: CoreChannelUsersFlow,
     private readonly importantMessagesFlow: ImportantMessagesFlow,
+    private readonly userService: UserService,
   ) {}
 
   async route(ctx: Context) {
+    const telegramUserId = ctx.from?.id;
+    if (telegramUserId) {
+      await this.userService.upsertTelegramUser(
+        telegramUserId,
+        ctx.from?.username ?? null,
+      );
+    }
+
     const data =
       ctx.callbackQuery && 'data' in ctx.callbackQuery
         ? ctx.callbackQuery.data

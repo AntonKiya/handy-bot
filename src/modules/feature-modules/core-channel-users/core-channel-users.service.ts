@@ -49,11 +49,8 @@ export class CoreChannelUsersService {
     private readonly channelPostRepo: Repository<ChannelPost>,
     @InjectRepository(CoreChannelUsersComment)
     private readonly commentRepo: Repository<CoreChannelUsersComment>,
-    @InjectRepository(CoreChannelUsersPostCommentsSync)
-    private readonly postSyncRepo: Repository<CoreChannelUsersPostCommentsSync>,
     @InjectRepository(CoreChannelUsersChannelSync)
     private readonly channelSyncRepo: Repository<CoreChannelUsersChannelSync>,
-    @InjectRepository(User) private readonly userRepo: Repository<User>,
     private readonly telegramCoreService: TelegramCoreService,
   ) {}
 

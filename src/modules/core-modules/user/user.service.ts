@@ -9,4 +9,29 @@ export class UserService {
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
   ) {}
+
+  async upsertTelegramUser(
+    telegramUserId: number,
+    username: string | null,
+  ): Promise<User> {
+    const existing = await this.userRepository.findOne({
+      where: { telegram_user_id: telegramUserId },
+    });
+
+    if (!existing) {
+      const created = this.userRepository.create({
+        telegram_user_id: telegramUserId,
+        username,
+      });
+
+      return this.userRepository.save(created);
+    }
+
+    if (existing.username !== username) {
+      existing.username = username;
+      return this.userRepository.save(existing);
+    }
+
+    return existing;
+  }
 }
