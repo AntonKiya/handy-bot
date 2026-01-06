@@ -549,10 +549,6 @@ export class ImportantMessagesFlow {
         await this.handleCancelAddChannel(ctx);
         break;
 
-      case ImportantMessagesAction.VerifyMenu:
-        await this.handleVerify(ctx);
-        break;
-
       case ImportantMessagesAction.BackMenu:
         await this.handleBackToMainMenu(ctx);
         break;
@@ -650,22 +646,6 @@ export class ImportantMessagesFlow {
     await this.userStateService.clear(userId);
 
     await this.showImportantMessagesMenu(ctx);
-  }
-
-  private async handleVerify(ctx: Context) {
-    // TODO: Здесь будет проверка что бот админ в канале и в дискуссионной группе канала.
-
-    const text =
-      'Проверка подключения пока не реализована.\n\n' +
-      'Следующим шагом добавим проверку прав бота и дискуссионной группы.';
-
-    const keyboard = buildImportantMessagesMenuKeyboard();
-
-    if ('callbackQuery' in ctx && ctx.callbackQuery) {
-      await ctx.editMessageText(text, { ...keyboard });
-    } else {
-      await ctx.reply(text, { ...keyboard });
-    }
   }
 
   private async handleBackToMainMenu(ctx: Context) {

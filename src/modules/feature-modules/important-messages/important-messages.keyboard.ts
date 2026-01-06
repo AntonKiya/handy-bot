@@ -25,12 +25,6 @@ export function buildImportantMessagesMenuKeyboard() {
         IMPORTANT_MESSAGES_CB.addChannelMenu,
       ),
     ],
-    [
-      Markup.button.callback(
-        'Проверить подключение',
-        IMPORTANT_MESSAGES_CB.verifyMenu,
-      ),
-    ],
     [Markup.button.callback('⬅ Главное меню', IMPORTANT_MESSAGES_CB.backMenu)],
   ]);
 }
