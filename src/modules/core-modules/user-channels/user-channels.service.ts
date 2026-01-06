@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import { UserChannel, UserChannelFeature } from './user-channel.entity';
 import { User } from '../user/user.entity';
 import { Channel } from '../channel/channel.entity';
+import { ChannelService } from '../channel/channel.service';
 
 export interface ChannelInfo {
   telegramChatId: string;
@@ -19,6 +20,7 @@ export class UserChannelsService {
     private readonly userRepository: Repository<User>,
     @InjectRepository(Channel)
     private readonly channelRepository: Repository<Channel>,
+    private readonly channelService: ChannelService,
   ) {}
 
   /**
@@ -142,13 +144,9 @@ export class UserChannelsService {
       return { type: 'user-not-found' };
     }
 
-    const username = channelUsernameWithAt.startsWith('@')
-      ? channelUsernameWithAt.slice(1)
-      : channelUsernameWithAt;
-
-    const channel = await this.channelRepository.findOne({
-      where: { username },
-    });
+    const channel = await this.channelService.getChannelByUsername(
+      channelUsernameWithAt,
+    );
 
     if (!channel) {
       return { type: 'channel-not-found' };

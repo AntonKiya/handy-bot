@@ -6,9 +6,14 @@ import { Channel } from '../channel/channel.entity';
 import { UserChannelsService } from './user-channels.service';
 import { UserChannelsFlowService } from './user-channels-flow.service';
 import { MenuModule } from '../menu/menu.module';
+import { ChannelModule } from '../channel/channel.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([UserChannel, User, Channel]), MenuModule],
+  imports: [
+    TypeOrmModule.forFeature([UserChannel, User, Channel]),
+    MenuModule,
+    ChannelModule,
+  ],
   providers: [UserChannelsService, UserChannelsFlowService],
   exports: [UserChannelsService, UserChannelsFlowService],
 })

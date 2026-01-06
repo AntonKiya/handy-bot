@@ -18,6 +18,7 @@ import {
   UserState,
   UserStateService,
 } from '../../../common/state/user-state.service';
+import { TelegramAccessVerifierService } from '../../core-modules/telegram-access/telegram-access-verifier.service';
 
 @Injectable()
 export class ImportantMessagesFlow {
@@ -29,6 +30,7 @@ export class ImportantMessagesFlow {
     private readonly channelService: ChannelService,
     private readonly menuService: MenuService,
     private readonly userStateService: UserStateService,
+    private readonly telegramAccessVerifier: TelegramAccessVerifierService,
   ) {}
 
   /**
@@ -52,6 +54,79 @@ export class ImportantMessagesFlow {
     }
 
     const channelUsernameWithAt = this.normalizeChannelUsername(text);
+
+    const channel = await this.channelService.getChannelByUsername(
+      channelUsernameWithAt,
+    );
+
+    if (!channel) {
+      await ctx.reply(
+        `Канал ${channelUsernameWithAt} не найден в системе.\n\n` +
+          `Добавьте бота как администратора в этот канал и убедитесь, что у канала есть дискуссионная группа.\n` +
+          `Затем попробуйте снова.`,
+      );
+      return;
+    }
+
+    const channelChatId = Number(channel.telegram_chat_id);
+
+    const botAdminInChannel =
+      await this.telegramAccessVerifier.verifyBotIsAdminInChannel(
+        ctx.telegram,
+        channelChatId,
+      );
+
+    if (!botAdminInChannel.ok) {
+      await ctx.reply(
+        `❌ Бот не является администратором в канале ${channelUsernameWithAt}.\n\n` +
+          `Добавьте бота администратором в канал и попробуйте снова.`,
+      );
+      return;
+    }
+
+    const hasDiscussionGroup =
+      this.telegramAccessVerifier.verifyChannelHasDiscussionGroup(
+        (channel as any).discussion_group_id,
+      );
+
+    if (!hasDiscussionGroup.ok) {
+      await ctx.reply(
+        `❌ У канала ${channelUsernameWithAt} не подключена дискуссионная группа.\n\n` +
+          `Включите обсуждения (discussion group) и попробуйте снова.`,
+      );
+      return;
+    }
+
+    const discussionGroupChatId = Number((channel as any).discussion_group_id);
+
+    const botAdminInDiscussionGroup =
+      await this.telegramAccessVerifier.verifyBotIsAdminInDiscussionGroup(
+        ctx.telegram,
+        discussionGroupChatId,
+      );
+
+    if (!botAdminInDiscussionGroup.ok) {
+      await ctx.reply(
+        `❌ Бот не является администратором в дискуссионной группе канала ${channelUsernameWithAt}.\n\n` +
+          `Добавьте бота администратором в дискуссионную группу и попробуйте снова.`,
+      );
+      return;
+    }
+
+    const userAdminInChannel =
+      await this.telegramAccessVerifier.verifyUserIsAdminInChannel(
+        ctx.telegram,
+        channelChatId,
+        telegramUserId,
+      );
+
+    if (!userAdminInChannel.ok) {
+      await ctx.reply(
+        `❌ Подключить канал может только администратор.\n\n` +
+          `Похоже, вы не являетесь администратором канала ${channelUsernameWithAt}.`,
+      );
+      return;
+    }
 
     const result =
       await this.userChannelsService.attachChannelToUserFeatureByUsername(
@@ -84,6 +159,13 @@ export class ImportantMessagesFlow {
       );
       await this.userStateService.clear(telegramUserId);
       await this.showImportantMessagesMenu(ctx);
+      return;
+    }
+
+    if (result.type === 'user-not-found') {
+      await ctx.reply(
+        `Пользователь не найден. Пожалуйста, отправьте команду /start и попробуйте снова.`,
+      );
       return;
     }
 

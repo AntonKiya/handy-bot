@@ -27,4 +27,18 @@ export class ChannelService {
       ],
     });
   }
+
+  /**
+   * Получение канала по @username (или username без @)
+   */
+  async getChannelByUsername(usernameWithAt: string): Promise<Channel | null> {
+    const username = (usernameWithAt ?? '').trim().replace(/^@/, '');
+    if (!username) {
+      return null;
+    }
+
+    return this.channelRepository.findOne({
+      where: { username },
+    });
+  }
 }

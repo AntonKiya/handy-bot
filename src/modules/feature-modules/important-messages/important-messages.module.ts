@@ -15,6 +15,7 @@ import { UserChannelsModule } from '../../core-modules/user-channels/user-channe
 import { ChannelModule } from '../../core-modules/channel/channel.module';
 import { MenuModule } from '../../core-modules/menu/menu.module';
 import { StateModule } from '../../../common/state/state.module';
+import { TelegramAccessModule } from '../../core-modules/telegram-access/telegram-access.module';
 
 @Module({
   imports: [
@@ -23,6 +24,7 @@ import { StateModule } from '../../../common/state/state.module';
     ChannelModule,
     StateModule,
     MenuModule,
+    TelegramAccessModule,
   ],
   providers: [
     // Services
