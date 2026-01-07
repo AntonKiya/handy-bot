@@ -10,6 +10,7 @@ import {
   buildImportantMessagesNotificationKeyboard,
   buildImportantMessagesMenuKeyboard,
   buildImportantMessagesAddChannelKeyboard,
+  buildImportantMessagesChannelsKeyboard,
 } from './important-messages.keyboard';
 import { ChannelService } from '../../core-modules/channel/channel.service';
 import { UserChannelFeature } from '../../core-modules/user-channels/user-channel.entity';
@@ -32,6 +33,31 @@ export class ImportantMessagesFlow {
     private readonly userStateService: UserStateService,
     private readonly telegramAccessVerifier: TelegramAccessVerifierService,
   ) {}
+
+  private isMessageNotModifiedError(error: any): boolean {
+    const desc =
+      error?.response?.description ||
+      error?.description ||
+      error?.message ||
+      '';
+    return typeof desc === 'string' && desc.includes('message is not modified');
+  }
+
+  private async safeEditMessageText(
+    ctx: Context,
+    text: string,
+    extra?: Record<string, any>,
+  ) {
+    try {
+      await ctx.editMessageText(text, extra as any);
+    } catch (e: any) {
+      // Нормальная ситуация в Telegram: попытались отредактировать тем же самым текстом/клавиатурой.
+      if (this.isMessageNotModifiedError(e)) {
+        return;
+      }
+      throw e;
+    }
+  }
 
   /**
    * Публичный метод, который вызывается из TextRouter.
@@ -181,16 +207,11 @@ export class ImportantMessagesFlow {
     await ctx.reply('Не удалось подключить канал. Попробуйте позже.');
   }
 
-  /**
-   * Обработка входящего сообщения из группы
-   * Вызывается из Router
-   */
   async handleGroupMessage(
     ctx: Context,
     messageData: GroupMessageData,
   ): Promise<void> {
     try {
-      // Service сохраняет сообщение
       const savedMessageId =
         await this.importantMessagesService.saveImportantMessage(
           messageData,
@@ -201,23 +222,20 @@ export class ImportantMessagesFlow {
         return;
       }
 
-      // Service определяет важность сообщения
       const categories =
         await this.importantMessagesService.processGroupMessage(messageData);
 
-      // Если сообщение не важное - завершаем
       if (!categories || categories.length === 0) {
         return;
       }
 
-      // Если важное - обрабатываем
       await this.handleImportantMessage(
         ctx,
         messageData,
         categories,
         savedMessageId,
       );
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(
         `Error in handleGroupMessage: ${error.message}`,
         error.stack,
@@ -225,10 +243,6 @@ export class ImportantMessagesFlow {
     }
   }
 
-  /**
-   * Обработка важного сообщения
-   * Внутренний метод Flow
-   */
   private async handleImportantMessage(
     ctx: Context,
     messageData: GroupMessageData,
@@ -239,7 +253,6 @@ export class ImportantMessagesFlow {
       `Handling important message ${messageData.messageId} from chat ${messageData.chatId}, categories: ${categories.join(', ')}`,
     );
 
-    // Отправляем уведомления админам
     await this.sendNotificationToAdmins(
       ctx.telegram,
       savedMessageId,
@@ -247,35 +260,26 @@ export class ImportantMessagesFlow {
       categories,
     );
 
-    // Service обновляет время уведомления
     await this.importantMessagesService.updateNotifiedAt(savedMessageId);
   }
 
-  // TODO: сейчас сюда приходит и сам пост и комментарии админа, такого быть не должно
-  /**
-   * Обработка reply на важное сообщение
-   * Вызывается из Router
-   */
   async handleReply(
     ctx: Context,
     chatId: number,
     replyToMessageId: number,
   ): Promise<void> {
     try {
-      // Получаем канал
       const channel =
         await this.channelService.getChannelByTelegramChatId(chatId);
 
       if (!channel) return;
 
-      // Проверяем существует ли запись
       const message =
         await this.importantMessagesService.getMessageByTelegramId(
           channel.id,
           replyToMessageId,
         );
 
-      // Если записи нет - создаем (это пост, на который отвечают)
       if (!message) {
         await this.importantMessagesService.saveMessageForHypeTracking(
           channel.id,
@@ -284,13 +288,11 @@ export class ImportantMessagesFlow {
         );
       }
 
-      // Инкрементим счетчик
       await this.importantMessagesService.incrementRepliesCount(
         channel.id,
         replyToMessageId,
       );
 
-      // Проверяем hype порог
       const shouldNotify =
         await this.importantMessagesService.checkHypeThreshold(
           channel.id,
@@ -300,16 +302,11 @@ export class ImportantMessagesFlow {
       if (shouldNotify) {
         await this.sendHypeNotification(ctx, channel.id, replyToMessageId);
       }
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error handling reply: ${error.message}`, error.stack);
     }
   }
 
-  // TODO: сейчас сюда приходит и сам пост и комментарии админа, такого быть не должно
-  /**
-   * Обработка события message_reaction_count
-   * Вызывается из Router
-   */
   async handleReactionCount(
     ctx: Context,
     chatId: number,
@@ -318,20 +315,17 @@ export class ImportantMessagesFlow {
     newReaction: ReactionType[],
   ): Promise<void> {
     try {
-      // Получаем канал
       const channel =
         await this.channelService.getChannelByTelegramChatId(chatId);
 
       if (!channel) return;
 
-      // Проверяем существует ли запись
       const message =
         await this.importantMessagesService.getMessageByTelegramId(
           channel.id,
           messageId,
         );
 
-      // Если записи нет - создаем
       if (!message) {
         await this.importantMessagesService.saveMessageForHypeTracking(
           channel.id,
@@ -340,7 +334,6 @@ export class ImportantMessagesFlow {
         );
       }
 
-      // Подсчитываем общее количество реакций через Service
       const reactionsCount =
         await this.importantMessagesService.calculateTotalReactions(
           channel.id,
@@ -349,14 +342,12 @@ export class ImportantMessagesFlow {
           newReaction,
         );
 
-      // Обновляем reactions_count в БД
       await this.importantMessagesService.updateReactionsCount(
         channel.id,
         messageId,
         reactionsCount,
       );
 
-      // Проверяем hype порог (использует актуальные данные из БД)
       const shouldNotify =
         await this.importantMessagesService.checkHypeThreshold(
           channel.id,
@@ -366,7 +357,7 @@ export class ImportantMessagesFlow {
       if (shouldNotify) {
         await this.sendHypeNotification(ctx, channel.id, messageId);
       }
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(
         `Error handling reaction count: ${error.message}`,
         error.stack,
@@ -374,10 +365,6 @@ export class ImportantMessagesFlow {
     }
   }
 
-  /**
-   * Отправка hype уведомления
-   * Приватный метод
-   */
   private async sendHypeNotification(
     ctx: Context,
     channelId: string,
@@ -396,7 +383,6 @@ export class ImportantMessagesFlow {
       `Sending hype notification for message ${telegramMessageId} in channel ${channelId}`,
     );
 
-    // Формируем messageData
     const messageData: GroupMessageData = {
       chatId: message.channel.telegram_chat_id,
       chatTitle: null,
@@ -420,17 +406,12 @@ export class ImportantMessagesFlow {
       'hype',
     ]);
 
-    // Обновляем hype_notified_at
     await this.importantMessagesService.updateHypeNotifiedAt(
       channelId,
       telegramMessageId,
     );
   }
 
-  /**
-   * Отправка уведомлений админам
-   * Единый текст для всех категорий
-   */
   private async sendNotificationToAdmins(
     telegram: Context['telegram'],
     messageId: string,
@@ -461,7 +442,6 @@ export class ImportantMessagesFlow {
       return;
     }
 
-    // Формируем текст и кнопки
     const text = this.buildNotificationText(messageData, categories);
 
     let messageLink: string;
@@ -472,7 +452,6 @@ export class ImportantMessagesFlow {
         messageData.messageId,
       );
     } else {
-      // Формируем ссылку с fallback
       messageLink = buildMessageLink(
         channel.discussion_group_id,
         messageData.messageId,
@@ -488,7 +467,6 @@ export class ImportantMessagesFlow {
       messageId,
     );
 
-    // Отправляем каждому админу
     for (const adminId of adminIds) {
       try {
         await telegram.sendMessage(adminId, text, keyboard);
@@ -496,7 +474,7 @@ export class ImportantMessagesFlow {
         this.logger.debug(
           `Notification sent to admin ${adminId} for message ${messageId}`,
         );
-      } catch (error) {
+      } catch (error: any) {
         this.logger.warn(
           `Failed to send notification to admin ${adminId}: ${error.message}`,
         );
@@ -504,9 +482,6 @@ export class ImportantMessagesFlow {
     }
   }
 
-  /**
-   * Формирование текста уведомления
-   */
   private buildNotificationText(
     messageData: GroupMessageData,
     categories: string[],
@@ -522,9 +497,6 @@ export class ImportantMessagesFlow {
     return `📩 Важное сообщение в канале "${channelName}"\n\nКатегории: ${categoriesTags}\n\n${preview}`;
   }
 
-  /**
-   * Обработка callback от кнопок
-   */
   async handleCallback(ctx: Context, data: string): Promise<void> {
     const parts = data.split(':');
     const action = parts[1] as ImportantMessagesAction;
@@ -567,11 +539,10 @@ export class ImportantMessagesFlow {
 
   private async showImportantMessagesMenu(ctx: Context) {
     const text = 'Важные сообщения — меню';
-
     const keyboard = buildImportantMessagesMenuKeyboard();
 
     if ('callbackQuery' in ctx && ctx.callbackQuery) {
-      await ctx.editMessageText(text, { ...keyboard });
+      await this.safeEditMessageText(ctx, text, { ...keyboard });
     } else {
       await ctx.reply(text, { ...keyboard });
     }
@@ -589,11 +560,14 @@ export class ImportantMessagesFlow {
       UserChannelFeature.IMPORTANT_MESSAGES,
     );
 
+    const canAdd = channels.length < 1;
+
     let text: string;
     if (!channels.length) {
       text = 'У вас пока нет каналов, подключённых к important-messages.';
     } else {
       text =
+        '⚠️ MVP-лимит: можно подключить только 1 канал на пользователя.\n\n' +
         'Ваши каналы для important-messages:\n\n' +
         channels
           .map((ch) =>
@@ -602,10 +576,10 @@ export class ImportantMessagesFlow {
           .join('\n');
     }
 
-    const keyboard = buildImportantMessagesMenuKeyboard();
+    const keyboard = buildImportantMessagesChannelsKeyboard(canAdd);
 
     if ('callbackQuery' in ctx && ctx.callbackQuery) {
-      await ctx.editMessageText(text, { ...keyboard });
+      await this.safeEditMessageText(ctx, text, { ...keyboard });
     } else {
       await ctx.reply(text, { ...keyboard });
     }
@@ -618,24 +592,15 @@ export class ImportantMessagesFlow {
       return;
     }
 
-    const existing = await this.userChannelsService.getChannelsForUserByFeature(
+    // MVP-лимит: 1 канал на пользователя
+    const channels = await this.userChannelsService.getChannelsForUserByFeature(
       userId,
       UserChannelFeature.IMPORTANT_MESSAGES,
     );
 
-    if (existing.length >= 1) {
-      const text =
-        '⚠️ Можно подключить только 1 канал к важных сообщениях.\n\n' +
-        'Сейчас у вас уже есть подключённый канал.';
-
-      const keyboard = buildImportantMessagesMenuKeyboard();
-
-      if ('callbackQuery' in ctx && ctx.callbackQuery) {
-        await ctx.editMessageText(text, { ...keyboard });
-      } else {
-        await ctx.reply(text, { ...keyboard });
-      }
-
+    if (channels.length >= 1) {
+      // Просто показываем список + только "Назад" (кнопка "Добавить" не нужна)
+      await this.showMyChannels(ctx);
       return;
     }
 
@@ -651,7 +616,7 @@ export class ImportantMessagesFlow {
     const keyboard = buildImportantMessagesAddChannelKeyboard();
 
     if ('callbackQuery' in ctx && ctx.callbackQuery) {
-      await ctx.editMessageText(text, { ...keyboard });
+      await this.safeEditMessageText(ctx, text, { ...keyboard });
     } else {
       await ctx.reply(text, { ...keyboard });
     }
@@ -665,7 +630,6 @@ export class ImportantMessagesFlow {
     }
 
     await this.userStateService.clear(userId);
-
     await this.showImportantMessagesMenu(ctx);
   }
 
@@ -673,9 +637,6 @@ export class ImportantMessagesFlow {
     await this.menuService.redrawMainMenu(ctx);
   }
 
-  /**
-   * Обработка нажатия кнопки "Готово"
-   */
   private async handleDoneAction(ctx: Context): Promise<void> {
     try {
       if ('deleteMessage' in ctx && typeof ctx.deleteMessage === 'function') {
@@ -685,7 +646,7 @@ export class ImportantMessagesFlow {
       if ('answerCbQuery' in ctx && typeof ctx.answerCbQuery === 'function') {
         await ctx.answerCbQuery('✅ Готово');
       }
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(
         `Error handling done action: ${error.message}`,
         error.stack,

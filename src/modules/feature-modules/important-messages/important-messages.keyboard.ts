@@ -29,6 +29,31 @@ export function buildImportantMessagesMenuKeyboard() {
   ]);
 }
 
+/**
+ * Экран "Мои каналы" внутри important-messages:
+ * - если canAdd=false (лимит достигнут) — показываем только "Назад"
+ * - если canAdd=true — показываем "Добавить канал" + "Назад"
+ */
+export function buildImportantMessagesChannelsKeyboard(canAdd: boolean) {
+  const rows: any[] = [];
+
+  if (canAdd) {
+    rows.push([
+      Markup.button.callback(
+        'Добавить канал',
+        IMPORTANT_MESSAGES_CB.addChannelMenu,
+      ),
+    ]);
+  }
+
+  // Назад → возвращаемся в меню important-messages
+  rows.push([
+    Markup.button.callback('⬅ Назад', IMPORTANT_MESSAGES_CB.openMenu),
+  ]);
+
+  return Markup.inlineKeyboard(rows);
+}
+
 export function buildImportantMessagesAddChannelKeyboard() {
   return Markup.inlineKeyboard([
     [
