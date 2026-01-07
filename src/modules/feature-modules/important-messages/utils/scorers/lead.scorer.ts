@@ -30,16 +30,16 @@ export class LeadScorer {
     }
 
     // Проверка context словаря (продуктовые лид-слова)
-    if (
+    const hasContextLead =
       contextWords.size > 0 &&
-      hasWordsFromDictionary(normalizedText, contextWords)
-    ) {
+      hasWordsFromDictionary(normalizedText, contextWords);
+
+    if (hasContextLead) {
       score += WEIGHTS.LEAD.CONTEXT_WORDS;
       signals.push('has_context_lead_words');
     }
 
-    // Бонус если есть вопросительный знак + base лид-сигнал
-    if (originalText.includes('?') && hasBaseLead) {
+    if (originalText.includes('?') && (hasBaseLead || hasContextLead)) {
       score += WEIGHTS.LEAD.QUESTION_WITH_LEAD;
       signals.push('question_with_lead_signal');
     }

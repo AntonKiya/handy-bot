@@ -618,6 +618,27 @@ export class ImportantMessagesFlow {
       return;
     }
 
+    const existing = await this.userChannelsService.getChannelsForUserByFeature(
+      userId,
+      UserChannelFeature.IMPORTANT_MESSAGES,
+    );
+
+    if (existing.length >= 1) {
+      const text =
+        '⚠️ Можно подключить только 1 канал к важных сообщениях.\n\n' +
+        'Сейчас у вас уже есть подключённый канал.';
+
+      const keyboard = buildImportantMessagesMenuKeyboard();
+
+      if ('callbackQuery' in ctx && ctx.callbackQuery) {
+        await ctx.editMessageText(text, { ...keyboard });
+      } else {
+        await ctx.reply(text, { ...keyboard });
+      }
+
+      return;
+    }
+
     await this.userStateService.set(userId, {
       scope: 'important-messages',
       step: 'waiting_for_important_messages_channel_name',

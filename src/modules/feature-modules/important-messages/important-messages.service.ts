@@ -318,7 +318,7 @@ export class ImportantMessagesService {
     }
 
     const userId = replyToMessage?.from?.id || 0;
-    const text = replyToMessage?.text || null;
+    const text = replyToMessage?.text ?? replyToMessage?.caption ?? null;
 
     // Определяем post_message_id
     const postMessageId = await this.resolvePostMessageId(ctx, channelId);

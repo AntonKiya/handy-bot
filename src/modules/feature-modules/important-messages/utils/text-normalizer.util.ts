@@ -12,6 +12,7 @@ export function normalizeText(text: string): string {
 
   return text
     .toLowerCase()
+    .replace(/ё/g, 'е')
     .replace(/[.,!?;:()"'«»—–\-]/g, ' ') // удаляем знаки препинания, заменяя на пробел
     .trim()
     .replace(/\s+/g, ' '); // заменяем множественные пробелы на один
