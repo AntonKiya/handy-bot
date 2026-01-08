@@ -8,7 +8,6 @@ import { Telegraf, Context } from 'telegraf';
 import { CommandRouter } from './routers/command.router';
 import { MessageRouter } from './routers/message.router';
 import { CallbackRouter } from './routers/callback.router';
-import { MembershipRouter } from './routers/membership.router';
 import { ReactionRouter } from './routers/reaction.router';
 
 @Injectable()
@@ -20,7 +19,6 @@ export class TelegramBotService implements OnModuleInit, OnApplicationShutdown {
     private readonly commandRouter: CommandRouter,
     private readonly messageRouter: MessageRouter,
     private readonly callbackRouter: CallbackRouter,
-    private readonly membershipRouter: MembershipRouter,
     private readonly reactionRouter: ReactionRouter,
   ) {}
 
@@ -52,9 +50,6 @@ export class TelegramBotService implements OnModuleInit, OnApplicationShutdown {
 
     // Централизованный обработчик callback_query (кнопки)
     this.bot.on('callback_query', (ctx) => this.callbackRouter.route(ctx));
-
-    // Централизованный обработчик my_chat_member (добавление бота)
-    this.bot.on('my_chat_member', (ctx) => this.membershipRouter.route(ctx));
 
     this.bot.on('message_reaction', (ctx) => this.reactionRouter.route(ctx));
 

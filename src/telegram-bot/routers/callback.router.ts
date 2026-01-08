@@ -1,15 +1,14 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Context } from 'telegraf';
-import { SummaryChannelFlow } from '../../modules/summary-channel/summary-channel.flow';
-import { SUMMARY_CHANNEL_NAMESPACE } from '../../modules/summary-channel/summary-channel.callbacks';
-// import { SummaryCommentsFlow } from '../../modules/summary-comments/summary-comments.flow';
-// import { SUMMARY_COMMENTS_NAMESPACE } from '../../modules/summary-comments/summary-comments.callbacks';
-import { UserChannelsFlowService } from '../../modules/user-channels/user-channels-flow.service';
-import { CHANNELS_NAMESPACE } from '../../modules/user-channels/user-channels.callbacks';
-import { CORE_CHANNEL_USERS_NAMESPACE } from '../../modules/core-channel-users/core-channel-users.callbacks';
-import { CoreChannelUsersFlow } from '../../modules/core-channel-users/core-channel-users.flow';
-import { ImportantMessagesFlow } from '../../modules/important-messages/important-messages.flow';
-import { IMPORTANT_MESSAGES_NAMESPACE } from '../../modules/important-messages/important-messages.callbacks';
+import { SummaryChannelFlow } from '../../modules/feature-modules/summary-channel/summary-channel.flow';
+import { SUMMARY_CHANNEL_NAMESPACE } from '../../modules/feature-modules/summary-channel/summary-channel.callbacks';
+import { UserChannelsFlowService } from '../../modules/core-modules/user-channels/user-channels-flow.service';
+import { CHANNELS_NAMESPACE } from '../../modules/core-modules/user-channels/user-channels.callbacks';
+import { CORE_CHANNEL_USERS_NAMESPACE } from '../../modules/feature-modules/core-channel-users/core-channel-users.callbacks';
+import { CoreChannelUsersFlow } from '../../modules/feature-modules/core-channel-users/core-channel-users.flow';
+import { ImportantMessagesFlow } from '../../modules/feature-modules/important-messages/important-messages.flow';
+import { IMPORTANT_MESSAGES_NAMESPACE } from '../../modules/feature-modules/important-messages/important-messages.callbacks';
+import { UserService } from '../../modules/core-modules/user/user.service';
 
 @Injectable()
 export class CallbackRouter {
@@ -17,13 +16,21 @@ export class CallbackRouter {
 
   constructor(
     private readonly summaryChannelFlow: SummaryChannelFlow,
-    // private readonly summaryCommentsFlow: SummaryCommentsFlow,
     private readonly userChannelsFlow: UserChannelsFlowService,
     private readonly coreChannelUsersFlow: CoreChannelUsersFlow,
     private readonly importantMessagesFlow: ImportantMessagesFlow,
+    private readonly userService: UserService,
   ) {}
 
   async route(ctx: Context) {
+    const telegramUserId = ctx.from?.id;
+    if (telegramUserId) {
+      await this.userService.upsertTelegramUser(
+        telegramUserId,
+        ctx.from?.username ?? null,
+      );
+    }
+
     const data =
       ctx.callbackQuery && 'data' in ctx.callbackQuery
         ? ctx.callbackQuery.data
@@ -40,11 +47,6 @@ export class CallbackRouter {
     if (data.startsWith(`${SUMMARY_CHANNEL_NAMESPACE}:`)) {
       return this.summaryChannelFlow.handleCallback(ctx, data);
     }
-
-    // TODO: Summary comments temporary disabled
-    // if (data.startsWith(`${SUMMARY_COMMENTS_NAMESPACE}:`)) {
-    //   return this.summaryCommentsFlow.handleCallback(ctx, data);
-    // }
 
     if (data.startsWith(`${CHANNELS_NAMESPACE}:`)) {
       return this.userChannelsFlow.handleCallback(ctx, data);

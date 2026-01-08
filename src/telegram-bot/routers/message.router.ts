@@ -1,10 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Context } from 'telegraf';
 import { UserStateService } from '../../common/state/user-state.service';
-import { SummaryChannelFlow } from '../../modules/summary-channel/summary-channel.flow';
-// import { SummaryCommentsFlow } from '../../modules/summary-comments/summary-comments.flow';
-import { ImportantMessagesFlow } from '../../modules/important-messages/important-messages.flow';
+import { SummaryChannelFlow } from '../../modules/feature-modules/summary-channel/summary-channel.flow';
+import { ImportantMessagesFlow } from '../../modules/feature-modules/important-messages/important-messages.flow';
 import { GroupMessageData } from '../utils/types';
+import { UserService } from '../../modules/core-modules/user/user.service';
 
 @Injectable()
 export class MessageRouter {
@@ -13,8 +13,8 @@ export class MessageRouter {
   constructor(
     private readonly userStateService: UserStateService,
     private readonly summaryChannelFlow: SummaryChannelFlow,
-    // private readonly summaryCommentsFlow: SummaryCommentsFlow,
     private readonly importantMessagesFlow: ImportantMessagesFlow,
+    private readonly userService: UserService,
   ) {}
 
   async route(ctx: Context) {
@@ -67,6 +67,11 @@ export class MessageRouter {
     userId: number,
     text: string,
   ) {
+    await this.userService.upsertTelegramUser(
+      userId,
+      ctx.from?.username ?? null,
+    );
+
     if (!text) {
       this.logger.debug(`No text in private message from user ${userId}`);
       return;
@@ -82,12 +87,11 @@ export class MessageRouter {
     }
 
     switch (state.scope) {
-      case 'summary:channel':
+      case 'summary-channel':
         return this.summaryChannelFlow.handleState(ctx, text, state);
 
-      // TODO: Summary comments temporary disabled
-      // case 'summary:comments':
-      //   return this.summaryCommentsFlow.handleState(ctx, text, state);
+      case 'important-messages':
+        return this.importantMessagesFlow.handleState(ctx, text, state);
 
       default:
         this.logger.warn(
