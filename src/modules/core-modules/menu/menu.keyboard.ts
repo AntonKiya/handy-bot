@@ -17,7 +17,7 @@ export function buildMainMenuKeyboard() {
     ],
     [
       Markup.button.callback(
-        'Важные сообщения 📝',
+        'Важные сообщения 🌟💬',
         IMPORTANT_MESSAGES_CB.openMenu,
       ),
     ],

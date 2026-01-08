@@ -44,4 +44,7 @@ export class UserChannel {
 
   @Column({ name: 'is_admin', type: 'boolean', default: false })
   is_admin: boolean;
+
+  @Column({ name: 'deleted_at', type: 'timestamptz', nullable: true })
+  deleted_at: Date | null;
 }

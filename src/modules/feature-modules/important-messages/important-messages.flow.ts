@@ -11,6 +11,7 @@ import {
   buildImportantMessagesMenuKeyboard,
   buildImportantMessagesAddChannelKeyboard,
   buildImportantMessagesChannelsKeyboard,
+  buildImportantMessagesDetachChannelsKeyboard,
 } from './important-messages.keyboard';
 import { ChannelService } from '../../core-modules/channel/channel.service';
 import { UserChannelFeature } from '../../core-modules/user-channels/user-channel.entity';
@@ -521,6 +522,14 @@ export class ImportantMessagesFlow {
         await this.handleCancelAddChannel(ctx);
         break;
 
+      case ImportantMessagesAction.DetachChannelMenu:
+        await this.showDetachChannelMenu(ctx);
+        break;
+
+      case ImportantMessagesAction.DetachChannel:
+        await this.handleDetachChannel(ctx, parts[2]);
+        break;
+
       case ImportantMessagesAction.BackMenu:
         await this.handleBackToMainMenu(ctx);
         break;
@@ -538,8 +547,20 @@ export class ImportantMessagesFlow {
   }
 
   private async showImportantMessagesMenu(ctx: Context) {
+    const userId = ctx.from?.id;
+
+    let canDetach = false;
+    if (userId) {
+      const channels =
+        await this.userChannelsService.getChannelsForUserByFeature(
+          userId,
+          UserChannelFeature.IMPORTANT_MESSAGES,
+        );
+      canDetach = channels.length > 0;
+    }
+
     const text = 'Важные сообщения — меню';
-    const keyboard = buildImportantMessagesMenuKeyboard();
+    const keyboard = buildImportantMessagesMenuKeyboard(canDetach);
 
     if ('callbackQuery' in ctx && ctx.callbackQuery) {
       await this.safeEditMessageText(ctx, text, { ...keyboard });
@@ -548,7 +569,7 @@ export class ImportantMessagesFlow {
     }
   }
 
-  private async showMyChannels(ctx: Context) {
+  private async showMyChannels(ctx: Context, notice?: string) {
     const userId = ctx.from?.id;
     if (!userId) {
       this.logger.warn('showMyChannels called without userId');
@@ -567,13 +588,17 @@ export class ImportantMessagesFlow {
       text = 'У вас пока нет каналов, подключённых к important-messages.';
     } else {
       text =
-        '⚠️ MVP-лимит: можно подключить только 1 канал на пользователя.\n\n' +
+        '⚠️ Лимит: можно подключить только 1 канал на пользователя.\n\n' +
         'Ваши каналы для important-messages:\n\n' +
         channels
           .map((ch) =>
             ch.username ? `• @${ch.username}` : `• ID: ${ch.telegramChatId}`,
           )
           .join('\n');
+    }
+
+    if (notice) {
+      text = `${notice}\n\n${text}`;
     }
 
     const keyboard = buildImportantMessagesChannelsKeyboard(canAdd);
@@ -583,6 +608,80 @@ export class ImportantMessagesFlow {
     } else {
       await ctx.reply(text, { ...keyboard });
     }
+  }
+
+  private async showDetachChannelMenu(ctx: Context) {
+    const userId = ctx.from?.id;
+    if (!userId) {
+      this.logger.warn('showDetachChannelMenu called without userId');
+      return;
+    }
+
+    const channels = await this.userChannelsService.getChannelsForUserByFeature(
+      userId,
+      UserChannelFeature.IMPORTANT_MESSAGES,
+    );
+
+    if (!channels.length) {
+      await this.showImportantMessagesMenu(ctx);
+      return;
+    }
+
+    const text =
+      'Выберите канал который хотите отвязать от функции важных сообщений:';
+
+    const keyboard = buildImportantMessagesDetachChannelsKeyboard(channels);
+
+    if ('callbackQuery' in ctx && ctx.callbackQuery) {
+      await this.safeEditMessageText(ctx, text, { ...keyboard });
+    } else {
+      await ctx.reply(text, { ...keyboard });
+    }
+  }
+
+  private async handleDetachChannel(ctx: Context, telegramChatIdRaw?: string) {
+    const userId = ctx.from?.id;
+    if (!userId) {
+      this.logger.warn('handleDetachChannel called without userId');
+      return;
+    }
+
+    const telegramChatId = Number(telegramChatIdRaw);
+    if (!telegramChatIdRaw || Number.isNaN(telegramChatId)) {
+      if ('answerCbQuery' in ctx && typeof ctx.answerCbQuery === 'function') {
+        await ctx.answerCbQuery('Ошибка');
+      }
+      return;
+    }
+
+    const result =
+      await this.userChannelsService.detachChannelFromUserFeatureByTelegramChatId(
+        userId,
+        telegramChatId,
+        UserChannelFeature.IMPORTANT_MESSAGES,
+      );
+
+    if (result.type === 'detached') {
+      await this.showMyChannels(ctx, '✅ Отвязано. Текущий список каналов:');
+      return;
+    }
+
+    if (result.type === 'not-found') {
+      await this.showImportantMessagesMenu(ctx);
+      return;
+    }
+
+    if (result.type === 'channel-not-found') {
+      await this.showImportantMessagesMenu(ctx);
+      return;
+    }
+
+    if (result.type === 'user-not-found') {
+      await this.showImportantMessagesMenu(ctx);
+      return;
+    }
+
+    await this.showImportantMessagesMenu(ctx);
   }
 
   private async startAddChannel(ctx: Context) {

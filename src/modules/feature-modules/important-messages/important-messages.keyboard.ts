@@ -1,6 +1,11 @@
 import { Markup } from 'telegraf';
 import { IMPORTANT_MESSAGES_CB } from './important-messages.callbacks';
 
+type ChannelButtonInfo = {
+  telegramChatId: string;
+  username: string | null;
+};
+
 export function buildImportantMessagesNotificationKeyboard(
   messageLink: string,
   messageId: string,
@@ -16,8 +21,8 @@ export function buildImportantMessagesNotificationKeyboard(
   ]);
 }
 
-export function buildImportantMessagesMenuKeyboard() {
-  return Markup.inlineKeyboard([
+export function buildImportantMessagesMenuKeyboard(canDetach: boolean) {
+  const rows: any[] = [
     [Markup.button.callback('Мои каналы', IMPORTANT_MESSAGES_CB.listMenu)],
     [
       Markup.button.callback(
@@ -25,8 +30,22 @@ export function buildImportantMessagesMenuKeyboard() {
         IMPORTANT_MESSAGES_CB.addChannelMenu,
       ),
     ],
-    [Markup.button.callback('⬅ Главное меню', IMPORTANT_MESSAGES_CB.backMenu)],
+  ];
+
+  if (canDetach) {
+    rows.push([
+      Markup.button.callback(
+        'Отвязать канал',
+        IMPORTANT_MESSAGES_CB.detachChannelMenu,
+      ),
+    ]);
+  }
+
+  rows.push([
+    Markup.button.callback('⬅ Главное меню', IMPORTANT_MESSAGES_CB.backMenu),
   ]);
+
+  return Markup.inlineKeyboard(rows);
 }
 
 /**
@@ -63,4 +82,26 @@ export function buildImportantMessagesAddChannelKeyboard() {
       ),
     ],
   ]);
+}
+
+export function buildImportantMessagesDetachChannelsKeyboard(
+  channels: ChannelButtonInfo[],
+) {
+  const rows: any[] = [];
+
+  for (const ch of channels) {
+    const title = ch.username ? `@${ch.username}` : `ID: ${ch.telegramChatId}`;
+    rows.push([
+      Markup.button.callback(
+        title,
+        IMPORTANT_MESSAGES_CB.detachChannel(ch.telegramChatId),
+      ),
+    ]);
+  }
+
+  rows.push([
+    Markup.button.callback('⬅ Назад', IMPORTANT_MESSAGES_CB.openMenu),
+  ]);
+
+  return Markup.inlineKeyboard(rows);
 }
