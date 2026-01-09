@@ -82,6 +82,12 @@ export function buildSummaryChannelDetachChannelsKeyboard(
   return Markup.inlineKeyboard(rows);
 }
 
+export function buildSummaryChannelMainMenuOnlyKeyboard() {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback('⬅ Главное меню', SUMMARY_CHANNEL_CB.backMenu)],
+  ]);
+}
+
 function normalizeChannelUsername(input: string): string {
   const raw = (input ?? '').trim();
   if (!raw) return raw;

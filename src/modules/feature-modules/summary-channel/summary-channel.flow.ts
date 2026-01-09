@@ -11,6 +11,7 @@ import {
   buildSummaryChannelAddChannelKeyboard,
   buildSummaryChannelChannelsKeyboard,
   buildSummaryChannelDetachChannelsKeyboard,
+  buildSummaryChannelMainMenuOnlyKeyboard,
 } from './summary-channel.keyboard';
 import { UserStateService } from '../../../common/state/user-state.service';
 import { UserChannelsService } from '../../core-modules/user-channels/user-channels.service';
@@ -54,6 +55,19 @@ export class SummaryChannelFlow {
     }
   }
 
+  private async failAddChannelAndExitToMainMenu(
+    ctx: Context,
+    userId: number,
+    message: string,
+  ) {
+    await this.userStateService.clear(userId);
+
+    const keyboard = buildSummaryChannelMainMenuOnlyKeyboard();
+
+    // это текстовый ответ на ошибку, поэтому достаточно reply
+    await ctx.reply(message, { ...keyboard });
+  }
+
   /**
    * Публичный метод, который вызывается из TextRouter.
    * Flow сам не меняет state и не выполняет бизнес-логику —
@@ -90,35 +104,43 @@ export class SummaryChannelFlow {
         typeof desc === 'string' &&
         desc.includes('bot was kicked from the channel chat')
       ) {
-        await ctx.reply(
+        await this.failAddChannelAndExitToMainMenu(
+          ctx,
+          userId,
           `❌ Бот не имеет доступа к каналу ${channelUsernameWithAt}.\n\n` +
             `Похоже, бот был удалён (kicked) из этого канала.\n` +
             `Добавьте бота обратно и попробуйте снова.`,
         );
-        return; // state НЕ сбрасываем
+        return;
       }
 
-      await ctx.reply(
+      await this.failAddChannelAndExitToMainMenu(
+        ctx,
+        userId,
         `❌ Не удалось получить информацию о ${channelUsernameWithAt}.\n\n` +
           `Убедитесь, что это реальный публичный канал с @username, и попробуйте снова.`,
       );
-      return; // state НЕ сбрасываем
+      return;
     }
 
     if (!chat || chat.type !== 'channel') {
-      await ctx.reply(
+      await this.failAddChannelAndExitToMainMenu(
+        ctx,
+        userId,
         `⚠️ ${channelUsernameWithAt} — это не канал.\n\n` +
           `Пожалуйста, отправьте @username именно публичного канала (chat.type === "channel").`,
       );
-      return; // state НЕ сбрасываем
+      return;
     }
 
     if (!chat.username) {
-      await ctx.reply(
+      await this.failAddChannelAndExitToMainMenu(
+        ctx,
+        userId,
         `⚠️ Канал найден, но у него нет @username.\n\n` +
           `В MVP поддерживаются только публичные каналы с @username. Попробуйте другой канал.`,
       );
-      return; // state НЕ сбрасываем
+      return;
     }
 
     const telegramChatId = Number(chat.id);
@@ -141,11 +163,13 @@ export class SummaryChannelFlow {
       );
 
     if (result.type === 'channel-not-found') {
-      await ctx.reply(
+      await this.failAddChannelAndExitToMainMenu(
+        ctx,
+        userId,
         `Канал ${channelUsernameWithAt} не найден в системе.\n\n` +
           `Попробуйте снова.`,
       );
-      return; // state НЕ сбрасываем
+      return;
     }
 
     if (result.type === 'already-exists') {
@@ -172,13 +196,19 @@ export class SummaryChannelFlow {
     }
 
     if (result.type === 'user-not-found') {
-      await ctx.reply(
+      await this.failAddChannelAndExitToMainMenu(
+        ctx,
+        userId,
         `Пользователь не найден. Пожалуйста, отправьте команду /start и попробуйте снова.`,
       );
-      return; // state НЕ сбрасываем
+      return;
     }
 
-    await ctx.reply('Не удалось подключить канал. Попробуйте позже.');
+    await this.failAddChannelAndExitToMainMenu(
+      ctx,
+      userId,
+      'Не удалось подключить канал. Попробуйте позже.',
+    );
   }
 
   /**
