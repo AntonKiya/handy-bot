@@ -47,10 +47,7 @@ export class SummaryChannelFlow {
     try {
       await ctx.editMessageText(text, extra as any);
     } catch (e: any) {
-      // Нормальная ситуация в Telegram: попытались отредактировать тем же самым текстом/клавиатурой.
-      if (this.isMessageNotModifiedError(e)) {
-        return;
-      }
+      if (this.isMessageNotModifiedError(e)) return;
       throw e;
     }
   }
@@ -80,13 +77,8 @@ export class SummaryChannelFlow {
       return;
     }
 
-    if (state.scope !== 'summary-channel') {
-      return;
-    }
-
-    if (state.step !== 'waiting_for_summary_channel_name') {
-      return;
-    }
+    if (state.scope !== 'summary-channel') return;
+    if (state.step !== 'waiting_for_summary_channel_name') return;
 
     const channelUsernameWithAt = this.normalizeChannelUsername(text);
 
@@ -143,12 +135,13 @@ export class SummaryChannelFlow {
       return;
     }
 
-    const telegramChatId = Number(chat.id);
+    const telegramChatIdNumber = Number(chat.id);
+    const telegramChatIdString = String(chat.id);
     const usernameWithoutAt = String(chat.username);
 
     // A) Channel: upsert
     await this.channelService.upsertChannelFromTelegram({
-      telegramChatId,
+      telegramChatId: telegramChatIdNumber,
       username: usernameWithoutAt,
       discussionGroupChatId: null,
     });
@@ -190,8 +183,13 @@ export class SummaryChannelFlow {
       await this.userStateService.clear(userId);
       await this.showMyChannels(ctx);
 
-      // Текущая логика немедленного саммари остаётся как есть (будем приводить к ТЗ далее)
-      await this.sendChannelSummaries(ctx, channelUsernameWithAt);
+      // Немедленная генерация: business-logic внутри SummaryChannelService
+      await this.sendImmediateSummary(ctx, {
+        userId,
+        channelTelegramChatId: telegramChatIdString,
+        channelUsernameWithAt,
+        channelUsername: usernameWithoutAt,
+      });
       return;
     }
 
@@ -445,41 +443,34 @@ export class SummaryChannelFlow {
     return raw.startsWith('@') ? raw : `@${raw}`;
   }
 
-  /**
-   * Вспомогательный метод: запросить саммари для постов канала и отправить в чат в виде:
-   *   12345: краткое саммари поста...
-   */
-  private async sendChannelSummaries(ctx: Context, channelNameWithAt: string) {
-    const userId = ctx.from?.id;
-    this.logger.debug(
-      `Fetching summaries for channel ${channelNameWithAt} for user ${userId}`,
-    );
+  private async sendImmediateSummary(
+    ctx: Context,
+    params: {
+      userId: number;
+      channelTelegramChatId: string;
+      channelUsernameWithAt: string;
+      channelUsername: string;
+    },
+  ) {
+    const res = await this.summaryChannelService.runImmediateSummary(params);
 
-    try {
-      const summaries =
-        await this.summaryChannelService.getRecentPostSummariesForChannel(
-          channelNameWithAt,
-        );
-
-      if (!summaries.length) {
-        await ctx.reply(
-          `There are no suitable text posts in the ${channelNameWithAt} channel for the recent period.`,
-        );
-        return;
+    if (res.type === 'success') {
+      for (const msg of res.messages) {
+        await ctx.reply(msg);
       }
-
-      const lines = summaries.map((item) => `${item.id}: ${item.summary}`);
-      const messageText = lines.join('\n\n');
-
-      await ctx.reply(messageText);
-    } catch (e) {
-      this.logger.error(
-        `Failed to send summaries for channel ${channelNameWithAt}`,
-        e as any,
-      );
-      await ctx.reply(
-        `Failed to retrieve post summaries for ${channelNameWithAt}. Please try again later.`,
-      );
+      return;
     }
+
+    if (res.type === 'empty') {
+      await ctx.reply(res.message);
+      return;
+    }
+
+    if (res.type === 'limited') {
+      await ctx.reply(res.message);
+      return;
+    }
+
+    await ctx.reply(res.message);
   }
 }

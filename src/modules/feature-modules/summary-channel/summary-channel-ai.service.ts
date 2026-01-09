@@ -1,8 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { QwenClient } from '../../../ai/qwen.clinet';
 
-export type SummaryInputMap = Record<number, string>;
-export type SummaryOutputMap = Record<number, string>;
+export type SummaryInputMap = Record<string, string>;
+export type SummaryOutputMap = Record<string, string>;
 
 @Injectable()
 export class SummaryChannelAiService {
@@ -23,7 +23,7 @@ export class SummaryChannelAiService {
 
     const prompt = this.buildPrompt(posts);
     this.logger.debug(
-      `Sending ${ids.length} posts to Gemini for summarization...`,
+      `Sending ${ids.length} posts to Qwen for summarization...`,
     );
 
     const raw = await this.qwenClient.generateText(prompt);
@@ -94,7 +94,7 @@ export class SummaryChannelAiService {
     const expectedSet = new Set(expectedIds);
 
     if (!raw) {
-      this.logger.warn('Empty response from Gemini for summarizePosts');
+      this.logger.warn('Empty response from model for summarizePosts');
       return summaries;
     }
 
@@ -114,17 +114,12 @@ export class SummaryChannelAiService {
       const summary = part.slice(colonIndex + 1).trim();
 
       if (!id || !summary) {
-        this.logger.warn(
-          `Empty id or summary in AI response segment: "${part}"`,
-        );
+        this.logger.warn(`Empty id or summary in segment: "${part}"`);
         continue;
       }
 
       if (!expectedSet.has(id)) {
-        // Модель решила что-то выдумать с id - игнорируем
-        this.logger.warn(
-          `Unexpected id "${id}" in AI response, not in original posts list`,
-        );
+        this.logger.warn(`Unexpected id "${id}" in AI response`);
         continue;
       }
 
@@ -133,9 +128,7 @@ export class SummaryChannelAiService {
 
     for (const id of expectedIds) {
       if (!summaries[id]) {
-        this.logger.warn(
-          `No summary produced for id=${id}. Will be missing in final result.`,
-        );
+        this.logger.warn(`No summary produced for id=${id}`);
       }
     }
 
