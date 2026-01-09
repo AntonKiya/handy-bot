@@ -1,3 +1,5 @@
+// src/telegram-bot/features/summary-channel/summary-channel.service.ts
+
 import { Injectable, Logger } from '@nestjs/common';
 import * as cheerio from 'cheerio';
 import {
@@ -22,12 +24,13 @@ export class SummaryChannelService {
   async fetchRecentTextPostsForChannel(
     channelNameWithAt: string,
   ): Promise<ParsedChannelPost[]> {
-    const HOURS_WINDOW = 336;
+    const HOURS_WINDOW = 24;
     const cutoff = Date.now() - HOURS_WINDOW * 60 * 60 * 1000;
 
     const channelSlug = channelNameWithAt.replace(/^@/, '');
     let before: number | undefined;
     const result: ParsedChannelPost[] = [];
+    const seenPostIds = new Set<number>();
 
     const MAX_PAGES = 20;
     let page = 0;
@@ -104,7 +107,10 @@ export class SummaryChannelService {
 
         // Фильтр по окну времени
         if (!date || date.getTime() >= cutoff) {
-          result.push({ id, text, date });
+          if (!seenPostIds.has(id)) {
+            seenPostIds.add(id);
+            result.push({ id, text, date });
+          }
         }
       });
 
@@ -116,6 +122,28 @@ export class SummaryChannelService {
         break;
       }
     }
+
+    // Если упёрлись в лимит страниц и при этом не достигли cutoff —
+    // вероятно, за 24 часа постов слишком много, и выборка может быть неполной.
+    if (page >= MAX_PAGES) {
+      const oldestDate = result
+        .map((p) => p.date)
+        .filter((d): d is Date => !!d)
+        .sort((a, b) => a.getTime() - b.getTime())[0];
+
+      if (!oldestDate || oldestDate.getTime() >= cutoff) {
+        this.logger.warn(
+          `Reached MAX_PAGES=${MAX_PAGES} for channel ${channelSlug}, but still did not reach cutoff for last ${HOURS_WINDOW}h. Result may be incomplete.`,
+        );
+      }
+    }
+
+    // Сортировка по date ASC (посты без даты — в конец)
+    result.sort((a, b) => {
+      const at = a.date ? a.date.getTime() : Number.POSITIVE_INFINITY;
+      const bt = b.date ? b.date.getTime() : Number.POSITIVE_INFINITY;
+      return at - bt;
+    });
 
     this.logger.debug(
       `Fetched ${result.length} text posts for channel ${channelSlug} (last ${HOURS_WINDOW}h)`,
