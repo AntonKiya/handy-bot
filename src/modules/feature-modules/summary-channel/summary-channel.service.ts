@@ -1,5 +1,3 @@
-// src/telegram-bot/features/summary-channel/summary-channel.service.ts
-
 import { Injectable, Logger } from '@nestjs/common';
 import * as cheerio from 'cheerio';
 import { DataSource } from 'typeorm';
@@ -29,6 +27,10 @@ type ImmediateRunResult =
 export class SummaryChannelService {
   private readonly logger = new Logger(SummaryChannelService.name);
 
+  private readonly HOURS_WINDOW = 24;
+  private readonly LLM_BATCH_SIZE = 15;
+  private readonly SHORT_WORDS_THRESHOLD = 10;
+
   constructor(
     private readonly summaryChannelAiService: SummaryChannelAiService,
     private readonly dataSource: DataSource,
@@ -36,7 +38,7 @@ export class SummaryChannelService {
 
   /**
    * - лимит immediate 1 раз / 24 часа (без next_allowed_at)
-   * - запись channel_summary_runs + channel_summary_results
+   * - запись summary_channel_runs + summary_channel_results
    *
    * Важно: этот метод возвращает готовые тексты для отправки пользователю,
    * а Flow решает КАК отправлять (reply/edit, сколько сообщений и т.д.).
@@ -45,9 +47,14 @@ export class SummaryChannelService {
     userId: number;
     channelTelegramChatId: string; // bigint-string (например "-100123...")
     channelUsernameWithAt: string; // "@name"
-    channelUsername: string; // "name" (без @) — только для логов/текста при желании
+    channelUsername: string; // "name" (без @) — нужен для ссылок t.me/name/postId
   }): Promise<ImmediateRunResult> {
-    const { userId, channelTelegramChatId, channelUsernameWithAt } = params;
+    const {
+      userId,
+      channelTelegramChatId,
+      channelUsernameWithAt,
+      channelUsername,
+    } = params;
 
     // 1) Лимит: 1 успешный immediate-run / 24 часа на пользователя
     const limitCheck = await this.checkImmediateLimit(userId);
@@ -74,7 +81,7 @@ export class SummaryChannelService {
     try {
       savedRun = await runRepo.save(run);
     } catch (e: any) {
-      this.logger.error('Failed to create channel_summary_runs record', e);
+      this.logger.error('Failed to create summary_channel_runs record', e);
       return {
         type: 'error',
         message: 'Не удалось запустить генерацию саммари. Попробуйте позже.',
@@ -99,7 +106,7 @@ export class SummaryChannelService {
         };
       }
 
-      // 4) Генерация саммари (как сейчас, без шага 5)
+      // 4) Генерация саммари по ТЗ (частично): <10 слов → оригинал, батчи по 15
       const { summaries, resultsToStore } =
         await this.summarizeAndPrepareResults(posts, savedRun.id);
 
@@ -114,13 +121,16 @@ export class SummaryChannelService {
         error: null,
       });
 
-      // 7) Возвращаем текст для пользователя (старый формат: "<id>: <summary>")
-      const lines = summaries.map((item) => `${item.id}: ${item.summary}`);
-      const messageText = lines.join('\n\n');
+      // 7) Формат дайджеста + ссылки
+      const digestText = this.buildDigestMessage({
+        channelUsernameWithAt,
+        channelUsername,
+        summaries,
+      });
 
       return {
         type: 'success',
-        messages: this.splitTelegramMessage(messageText),
+        messages: this.splitTelegramMessage(digestText),
       };
     } catch (e: any) {
       this.logger.error(
@@ -204,6 +214,12 @@ export class SummaryChannelService {
     };
   }
 
+  /**
+   * Шаг 5 (MVP-версия):
+   * - если в посте <10 слов → summary = original
+   * - LLM вызываем батчами по 15 постов
+   * - сохраняем original + итоговый summary в results
+   */
   private async summarizeAndPrepareResults(
     posts: ParsedChannelPost[],
     runId: string,
@@ -211,37 +227,66 @@ export class SummaryChannelService {
     summaries: { id: number; summary: string }[];
     resultsToStore: Array<Partial<SummaryChannelResultEntity>>;
   }> {
-    const inputMap: SummaryInputMap = {};
+    // 1) Отделяем короткие посты (<10 слов) — их не шлём в LLM
+    const needAi: ParsedChannelPost[] = [];
+    const forcedSummaries: Record<string, string> = {};
+
     for (const p of posts) {
-      inputMap[String(p.id)] = p.text;
+      const original = this.normalizeOneLine(p.text);
+      const wc = this.countWords(original);
+
+      if (wc > 0 && wc < this.SHORT_WORDS_THRESHOLD) {
+        forcedSummaries[String(p.id)] = original; // <10 слов → оригинал
+      } else {
+        needAi.push({ ...p, text: original });
+      }
     }
 
-    let summariesMap: Record<string, string> = {};
-    try {
-      summariesMap =
-        await this.summaryChannelAiService.summarizePosts(inputMap);
-    } catch (e) {
-      this.logger.error(
-        `Failed to summarize posts, fallback to raw text snippets`,
-        e as any,
-      );
-      summariesMap = {};
+    // 2) Генерим summary для остальных батчами по 15
+    const aiSummaries: Record<string, string> = {};
+
+    const batches = this.chunkArray(needAi, this.LLM_BATCH_SIZE);
+    for (const batch of batches) {
+      const inputMap: SummaryInputMap = {};
+      for (const p of batch) {
+        inputMap[String(p.id)] = p.text;
+      }
+
+      try {
+        const batchMap =
+          await this.summaryChannelAiService.summarizePosts(inputMap);
+        for (const [k, v] of Object.entries(batchMap)) {
+          aiSummaries[k] = this.normalizeOneLine(v);
+        }
+      } catch (e) {
+        this.logger.error(
+          `LLM batch failed (size=${batch.length}), will fallback to snippets for these posts`,
+          e as any,
+        );
+        // фоллбек будет ниже при сборке результата
+      }
     }
 
+    // 3) Собираем итог: порядок сохраняем как в posts
     const summaries: { id: number; summary: string }[] = [];
     const resultsToStore: Array<Partial<SummaryChannelResultEntity>> = [];
 
     for (const p of posts) {
       const key = String(p.id);
-      const fallback = p.text.slice(0, 120);
-      const summary = (summariesMap[key] ?? fallback).trim();
+      const original = this.normalizeOneLine(p.text);
+
+      const forced = forcedSummaries[key];
+      const fromAi = aiSummaries[key];
+
+      // <10 слов → оригинал; иначе LLM; иначе fallback snippet
+      const summary = (forced ?? fromAi ?? original.slice(0, 120)).trim();
 
       summaries.push({ id: p.id, summary });
 
       resultsToStore.push({
         runId,
         telegramPostId: p.id,
-        originalText: p.text,
+        originalText: original,
         summaryText: summary,
       });
     }
@@ -249,11 +294,28 @@ export class SummaryChannelService {
     return { summaries, resultsToStore };
   }
 
+  private buildDigestMessage(params: {
+    channelUsernameWithAt: string;
+    channelUsername: string; // без @
+    summaries: { id: number; summary: string }[];
+  }): string {
+    const { channelUsernameWithAt, channelUsername, summaries } = params;
+
+    const blocks = summaries.map((item, idx) => {
+      const url = `https://t.me/${channelUsername}/${item.id}`;
+      return `${idx + 1}. ${this.normalizeOneLine(item.summary)}\n${url}`;
+    });
+
+    // Минимальный формат дайджеста (без усложнений)
+    return `Дайджест за последние ${this.HOURS_WINDOW}ч: ${channelUsernameWithAt}\n\n${blocks.join(
+      '\n\n',
+    )}`;
+  }
+
   async fetchRecentTextPostsForChannel(
     channelNameWithAt: string,
   ): Promise<ParsedChannelPost[]> {
-    const HOURS_WINDOW = 24;
-    const cutoff = Date.now() - HOURS_WINDOW * 60 * 60 * 1000;
+    const cutoff = Date.now() - this.HOURS_WINDOW * 60 * 60 * 1000;
 
     const channelSlug = channelNameWithAt.replace(/^@/, '');
     let before: number | undefined;
@@ -324,8 +386,6 @@ export class SummaryChannelService {
         }
 
         // Берём именно основной текст поста, а не текст реплая:
-        // .js-message_text — основной текст,
-        // .js-message_reply_text — превью цитируемого сообщения (игнорируем).
         const textEl = msg
           .find('.tgme_widget_message_text.js-message_text')
           .first();
@@ -361,7 +421,7 @@ export class SummaryChannelService {
 
       if (!oldestDate || oldestDate.getTime() >= cutoff) {
         this.logger.warn(
-          `Reached MAX_PAGES=${MAX_PAGES} for channel ${channelSlug}, but still did not reach cutoff for last ${HOURS_WINDOW}h. Result may be incomplete.`,
+          `Reached MAX_PAGES=${MAX_PAGES} for channel ${channelSlug}, but still did not reach cutoff for last ${this.HOURS_WINDOW}h. Result may be incomplete.`,
         );
       }
     }
@@ -374,7 +434,7 @@ export class SummaryChannelService {
     });
 
     this.logger.debug(
-      `Fetched ${result.length} text posts for channel ${channelSlug} (last ${HOURS_WINDOW}h)`,
+      `Fetched ${result.length} text posts for channel ${channelSlug} (last ${this.HOURS_WINDOW}h)`,
     );
 
     return result;
@@ -410,7 +470,6 @@ export class SummaryChannelService {
         `Failed to summarize posts for channel ${channelNameWithAt}, fallback to raw text snippets`,
         e as any,
       );
-      // На случай ошибки LLM возвращаем первые слова оригинала
       return posts.map((p) => ({
         id: p.id,
         summary: p.text.slice(0, 120),
@@ -422,6 +481,28 @@ export class SummaryChannelService {
       const summary = summariesMap[key] ?? p.text.slice(0, 120);
       return { id: p.id, summary };
     });
+  }
+
+  private countWords(text: string): number {
+    const t = this.normalizeOneLine(text);
+    if (!t) return 0;
+    return t
+      .split(' ')
+      .map((s) => s.trim())
+      .filter(Boolean).length;
+  }
+
+  private normalizeOneLine(text: string): string {
+    return (text ?? '').replace(/\s+/g, ' ').trim();
+  }
+
+  private chunkArray<T>(arr: T[], size: number): T[][] {
+    const n = Math.max(1, size | 0);
+    const out: T[][] = [];
+    for (let i = 0; i < arr.length; i += n) {
+      out.push(arr.slice(i, i + n));
+    }
+    return out;
   }
 
   private formatDuration(ms: number): string {
@@ -446,7 +527,7 @@ export class SummaryChannelService {
 
     if (t.length <= maxLen) return [t];
 
-    // Очень простой безопасный сплит по пустым строкам (не "шаг 5", просто защита)
+    // MVP: простой безопасный сплит по пустым строкам
     const parts = t.split('\n\n');
     const chunks: string[] = [];
 
@@ -461,7 +542,6 @@ export class SummaryChannelService {
       if (current) chunks.push(current);
       current = p;
 
-      // если один блок сам по себе огромный — режем грубо
       while (current.length > maxLen) {
         chunks.push(current.slice(0, maxLen));
         current = current.slice(maxLen);
