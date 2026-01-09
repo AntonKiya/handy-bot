@@ -1,16 +1,19 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { Context, Markup } from 'telegraf';
+import { Context } from 'telegraf';
 import {
   SummaryChannelService,
   SummaryChannelStateResult,
 } from './summary-channel.service';
 import { UserState } from '../../../common/state/user-state.service';
-import {
-  SUMMARY_CHANNEL_CB,
-  SummaryChannelAction,
-} from './summary-channel.callbacks';
+import { SummaryChannelAction } from './summary-channel.callbacks';
 import { MenuService } from '../../core-modules/menu/menu.service';
-import { buildSummaryChannelMenuKeyboard } from './summary-channel.keyboard';
+import {
+  buildSummaryChannelMenuKeyboard,
+  buildSummaryChannelAddChannelKeyboard,
+  buildSummaryChannelChannelsKeyboard,
+  buildSummaryChannelDetachChannelsKeyboard,
+} from './summary-channel.keyboard';
+import { UserStateService } from '../../../common/state/user-state.service';
 
 @Injectable()
 export class SummaryChannelFlow {
@@ -19,7 +22,33 @@ export class SummaryChannelFlow {
   constructor(
     private readonly summaryChannelService: SummaryChannelService,
     private readonly menuService: MenuService,
+    private readonly userStateService: UserStateService,
   ) {}
+
+  private isMessageNotModifiedError(error: any): boolean {
+    const desc =
+      error?.response?.description ||
+      error?.description ||
+      error?.message ||
+      '';
+    return typeof desc === 'string' && desc.includes('message is not modified');
+  }
+
+  private async safeEditMessageText(
+    ctx: Context,
+    text: string,
+    extra?: Record<string, any>,
+  ) {
+    try {
+      await ctx.editMessageText(text, extra as any);
+    } catch (e: any) {
+      // Нормальная ситуация в Telegram: попытались отредактировать тем же самым текстом/клавиатурой.
+      if (this.isMessageNotModifiedError(e)) {
+        return;
+      }
+      throw e;
+    }
+  }
 
   /**
    * Публичный метод, который вызывается из TextRouter.
@@ -33,6 +62,14 @@ export class SummaryChannelFlow {
       return;
     }
 
+    if (state.scope !== 'summary-channel') {
+      return;
+    }
+
+    if (state.step !== 'waiting_for_summary_channel_name') {
+      return;
+    }
+
     this.logger.debug(
       `SummaryChannelFlow.handleState for user ${userId}, step: ${state.step}, text: "${text}"`,
     );
@@ -41,13 +78,16 @@ export class SummaryChannelFlow {
       await this.summaryChannelService.handleState(userId, text, state);
 
     if (result.type === 'channel-added') {
-      await this.showMyChannels(ctx, {
-        mode: 'added',
-        newChannel: result.newChannel,
-        channels: result.channels,
-      });
+      // MVP UX: сначала success-сообщение, затем список каналов
+      await ctx.reply(
+        `✅ Канал ${result.newChannel} подключён к channel-summary, вы будете получать саммари по нему раз в день (в фиксированное время).`,
+      );
 
+      await this.showMyChannels(ctx);
+
+      // Текущая логика немедленного саммари остаётся как есть (будем приводить к ТЗ далее)
       await this.sendChannelSummaries(ctx, result.newChannel);
+      return;
     }
   }
 
@@ -59,166 +99,134 @@ export class SummaryChannelFlow {
       `SummaryChannel callback received: "${data}" from user ${ctx.from?.id}`,
     );
 
-    const parts = data.split(':'); // ['summary-channel', 'open-menu' | ...]
-    const action = parts[1];
-
-    console.log('data', data);
-    console.log('parts', parts);
-    console.log('action', action);
+    const parts = data.split(':');
+    const action = parts[1] as SummaryChannelAction;
 
     switch (action) {
       case SummaryChannelAction.OpenMenu:
-        return this.showSummaryChannelMenu(ctx);
+        await this.showSummaryChannelMenu(ctx);
+        break;
 
       case SummaryChannelAction.ListMenu:
-        return this.handleListChannels(ctx);
+        await this.showMyChannels(ctx);
+        break;
 
       case SummaryChannelAction.AddChannelMenu:
-        return this.handleAddChannel(ctx);
-
-      case SummaryChannelAction.BackMenu:
-        return this.handleBackToMainMenu(ctx);
+        await this.startAddChannel(ctx);
+        break;
 
       case SummaryChannelAction.CancelAddChannelMenu:
-        return this.handleCancelAdd(ctx);
+        await this.handleCancelAdd(ctx);
+        break;
+
+      case SummaryChannelAction.DetachChannelMenu:
+        await this.showDetachChannelMenu(ctx);
+        break;
+
+      case SummaryChannelAction.DetachChannel:
+        await this.handleDetachChannel(ctx, parts[2]);
+        break;
+
+      case SummaryChannelAction.BackMenu:
+        await this.handleBackToMainMenu(ctx);
+        break;
 
       default:
         if ('answerCbQuery' in ctx && typeof ctx.answerCbQuery === 'function') {
           await ctx.answerCbQuery();
         }
+        return;
     }
-  }
-
-  private async showSummaryChannelMenu(ctx: Context) {
-    const text = 'Саммари по каналам';
-
-    const keyboard = buildSummaryChannelMenuKeyboard();
-
-    await ctx.editMessageText(text, {
-      ...keyboard,
-    });
 
     if ('answerCbQuery' in ctx && typeof ctx.answerCbQuery === 'function') {
       await ctx.answerCbQuery();
     }
   }
 
-  /**
-   * Экран "Мои каналы".
-   * mode = 'default'  → обычный просмотр
-   * mode = 'added'    → канал только что добавлен, показываем success-капшн
-   */
-  private async showMyChannels(
-    ctx: Context,
-    options?: {
-      mode?: 'default' | 'added';
-      newChannel?: string;
-      channels?: string[];
-    },
-  ) {
+  private async showSummaryChannelMenu(ctx: Context) {
+    const userId = ctx.from?.id;
+
+    let canDetach = false;
+    if (userId) {
+      const channels = this.summaryChannelService.getChannelsForUser(userId);
+      canDetach = channels.length > 0;
+    }
+
+    const text = 'Саммари постов канала — меню';
+    const keyboard = buildSummaryChannelMenuKeyboard(canDetach);
+
+    if ('callbackQuery' in ctx && ctx.callbackQuery) {
+      await this.safeEditMessageText(ctx, text, { ...keyboard });
+    } else {
+      await ctx.reply(text, { ...keyboard });
+    }
+  }
+
+  private async showMyChannels(ctx: Context, notice?: string) {
     const userId = ctx.from?.id;
     if (!userId) {
       this.logger.warn('showMyChannels called without userId');
       return;
     }
 
-    const mode = options?.mode ?? 'default';
-    const newChannel = options?.newChannel;
-    const channels =
-      options?.channels ??
-      this.summaryChannelService.getChannelsForUser(userId);
+    const channels = this.summaryChannelService.getChannelsForUser(userId);
+    const canAdd = channels.length < 1; // UI-поведение как в important-messages (реальный enforce — шаг 2)
 
     let text: string;
-
     if (!channels.length) {
-      text = 'У вас пока нет каналов для саммари.';
+      text = 'У вас пока нет каналов, подключённых к channel-summary.';
     } else {
-      if (mode === 'added' && newChannel) {
-        text = `✅ Канал ${newChannel} добавлен.\n\nТекущий список ваших каналов:\n`;
-      } else {
-        text = 'Ваши каналы:\n';
-      }
-
-      text += '\n' + channels.map((c) => `• ${c}`).join('\n');
+      text =
+        '⚠️ Лимит: можно подключить только 1 канал на пользователя.\n\n' +
+        'Ваши каналы для channel-summary:\n\n' +
+        channels.map((c) => `• ${this.normalizeChannelUsername(c)}`).join('\n');
     }
 
-    const keyboard = Markup.inlineKeyboard([
-      [
-        Markup.button.callback(
-          'Добавить канал',
-          SUMMARY_CHANNEL_CB.addChannelMenu,
-        ),
-      ],
-      [Markup.button.callback('⬅ Назад', SUMMARY_CHANNEL_CB.openMenu)],
-    ]);
+    if (notice) {
+      text = `${notice}\n\n${text}`;
+    }
+
+    const keyboard = buildSummaryChannelChannelsKeyboard(canAdd);
 
     if ('callbackQuery' in ctx && ctx.callbackQuery) {
-      await ctx.editMessageText(text, {
-        ...keyboard,
-      });
-
-      if ('answerCbQuery' in ctx && typeof ctx.answerCbQuery === 'function') {
-        await ctx.answerCbQuery();
-      }
+      await this.safeEditMessageText(ctx, text, { ...keyboard });
     } else {
-      await ctx.reply(text, {
-        ...keyboard,
-      });
+      await ctx.reply(text, { ...keyboard });
     }
   }
 
-  /**
-   * Заглушка: "Мои каналы"
-   */
-  private async handleListChannels(ctx: Context) {
-    this.logger.debug(
-      `SummaryChannel: list channels requested by user ${ctx.from?.id}`,
-    );
-
-    await this.showMyChannels(ctx, {
-      mode: 'default',
-    });
-  }
-
-  /**
-   * Заглушка: "Добавить канал"
-   */
-  private async handleAddChannel(ctx: Context) {
+  private async startAddChannel(ctx: Context) {
     const userId = ctx.from?.id;
     if (!userId) {
-      this.logger.warn('handleAddChannel called without userId');
+      this.logger.warn('startAddChannel called without userId');
       return;
     }
 
-    this.logger.debug(
-      `SummaryChannel: add channel requested by user ${userId}`,
-    );
+    // UI-лимит (реальный enforce — шаг 2)
+    const channels = this.summaryChannelService.getChannelsForUser(userId);
+    if (channels.length >= 1) {
+      await this.showMyChannels(
+        ctx,
+        '⚠️ Лимит: можно подключить только 1 канал на пользователя.',
+      );
+      return;
+    }
 
-    const { message } =
-      await this.summaryChannelService.startAddChannel(userId);
-
-    const keyboard = Markup.inlineKeyboard([
-      [Markup.button.callback('⬅ Назад', SUMMARY_CHANNEL_CB.cancelAddMenu)],
-    ]);
-
-    await ctx.editMessageText(message, {
-      ...keyboard,
+    await this.userStateService.set(userId, {
+      scope: 'summary-channel',
+      step: 'waiting_for_summary_channel_name',
     });
 
-    if ('answerCbQuery' in ctx && typeof ctx.answerCbQuery === 'function') {
-      await ctx.answerCbQuery();
-    }
-  }
+    const text =
+      'Отправьте @username канала, который хотите подключить к channel-summary.\n\n' +
+      'Важно: в MVP поддерживаются только публичные каналы с @username.';
 
-  /**
-   * Заглушка: "Назад в главное меню"
-   * Позже здесь будем звать MenuService и возвращать основное меню.
-   */
-  private async handleBackToMainMenu(ctx: Context) {
-    await this.menuService.redrawMainMenu(ctx);
+    const keyboard = buildSummaryChannelAddChannelKeyboard();
 
-    if ('answerCbQuery' in ctx && typeof ctx.answerCbQuery === 'function') {
-      await ctx.answerCbQuery();
+    if ('callbackQuery' in ctx && ctx.callbackQuery) {
+      await this.safeEditMessageText(ctx, text, { ...keyboard });
+    } else {
+      await ctx.reply(text, { ...keyboard });
     }
   }
 
@@ -229,17 +237,72 @@ export class SummaryChannelFlow {
       return;
     }
 
-    this.logger.debug(
-      `SummaryChannel: cancel add channel requested by user ${userId}`,
+    // MVP: состояние сбрасываем только по "Назад" на экране ввода
+    await this.summaryChannelService.cancelAddChannel(userId);
+    await this.showSummaryChannelMenu(ctx);
+  }
+
+  private async showDetachChannelMenu(ctx: Context) {
+    const userId = ctx.from?.id;
+    if (!userId) {
+      this.logger.warn('showDetachChannelMenu called without userId');
+      return;
+    }
+
+    const channels = this.summaryChannelService.getChannelsForUser(userId);
+    if (!channels.length) {
+      await this.showSummaryChannelMenu(ctx);
+      return;
+    }
+
+    const text =
+      'Выберите канал который хотите отвязать от функции саммари постов:';
+    const keyboard = buildSummaryChannelDetachChannelsKeyboard(channels);
+
+    if ('callbackQuery' in ctx && ctx.callbackQuery) {
+      await this.safeEditMessageText(ctx, text, { ...keyboard });
+    } else {
+      await ctx.reply(text, { ...keyboard });
+    }
+  }
+
+  private async handleDetachChannel(ctx: Context, usernameRaw?: string) {
+    const userId = ctx.from?.id;
+    if (!userId) {
+      this.logger.warn('handleDetachChannel called without userId');
+      return;
+    }
+
+    const raw = (usernameRaw ?? '').trim();
+    if (!raw) {
+      await this.showSummaryChannelMenu(ctx);
+      return;
+    }
+
+    const channelUsernameWithAt = this.normalizeChannelUsername(raw);
+
+    const result = this.summaryChannelService.detachChannel(
+      userId,
+      channelUsernameWithAt,
     );
 
-    await this.summaryChannelService.cancelAddChannel(userId);
-
-    await this.showSummaryChannelMenu(ctx);
-
-    if ('answerCbQuery' in ctx && typeof ctx.answerCbQuery === 'function') {
-      await ctx.answerCbQuery();
+    if (result.type === 'detached') {
+      await this.showMyChannels(ctx, '✅ Отвязано. Текущий список каналов:');
+      return;
     }
+
+    // Если не нашли — просто вернём в меню
+    await this.showSummaryChannelMenu(ctx);
+  }
+
+  private async handleBackToMainMenu(ctx: Context) {
+    await this.menuService.redrawMainMenu(ctx);
+  }
+
+  private normalizeChannelUsername(input: string): string {
+    const raw = (input ?? '').trim();
+    if (!raw) return raw;
+    return raw.startsWith('@') ? raw : `@${raw}`;
   }
 
   /**
@@ -266,7 +329,6 @@ export class SummaryChannelFlow {
       }
 
       const lines = summaries.map((item) => `${item.id}: ${item.summary}`);
-
       const messageText = lines.join('\n\n');
 
       await ctx.reply(messageText);

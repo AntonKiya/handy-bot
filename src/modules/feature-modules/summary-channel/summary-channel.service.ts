@@ -47,7 +47,8 @@ export class SummaryChannelService {
     );
 
     return {
-      message: 'Введите название канала начиная с @',
+      message:
+        'Отправьте @username канала, который хотите подключить к channel-summary.',
     };
   }
 
@@ -112,6 +113,43 @@ export class SummaryChannelService {
 
   getChannelsForUser(userId: number): string[] {
     return this.channelsByUser.get(userId) ?? [];
+  }
+
+  detachChannel(
+    userId: number,
+    channelNameWithAt: string,
+  ): { type: 'detached' } | { type: 'not-found' } {
+    const list = this.channelsByUser.get(userId) ?? [];
+    if (!list.length) {
+      return { type: 'not-found' };
+    }
+
+    const normalized = this.normalizeChannelUsername(channelNameWithAt);
+
+    const idx = list.findIndex(
+      (c) =>
+        this.normalizeChannelUsername(c).toLowerCase() ===
+        normalized.toLowerCase(),
+    );
+
+    if (idx === -1) {
+      return { type: 'not-found' };
+    }
+
+    list.splice(idx, 1);
+    this.channelsByUser.set(userId, list);
+
+    this.logger.debug(
+      `Channel "${normalized}" detached for user ${userId}. Total channels: ${list.length}`,
+    );
+
+    return { type: 'detached' };
+  }
+
+  private normalizeChannelUsername(input: string): string {
+    const raw = (input ?? '').trim();
+    if (!raw) return raw;
+    return raw.startsWith('@') ? raw : `@${raw}`;
   }
 
   async fetchRecentTextPostsForChannel(
