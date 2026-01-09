@@ -1,17 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
 import * as cheerio from 'cheerio';
 import {
-  UserState,
-  UserStateService,
-} from '../../../common/state/user-state.service';
-import {
   SummaryChannelAiService,
   SummaryInputMap,
 } from './summary-channel-ai.service';
-
-export type SummaryChannelStateResult =
-  | { type: 'none' }
-  | { type: 'channel-added'; newChannel: string; channels: string[] };
 
 export interface ParsedChannelPost {
   id: number;
@@ -23,134 +15,9 @@ export interface ParsedChannelPost {
 export class SummaryChannelService {
   private readonly logger = new Logger(SummaryChannelService.name);
 
-  private readonly channelsByUser = new Map<number, string[]>();
-
   constructor(
-    private readonly userStateService: UserStateService,
     private readonly summaryChannelAiService: SummaryChannelAiService,
   ) {}
-
-  /**
-   * Старт сценария "добавить канал".
-   * Здесь:
-   *  - ставим пользователю state
-   *  - возвращаем текст, который нужно показать в UI
-   */
-  async startAddChannel(userId: number): Promise<{ message: string }> {
-    await this.userStateService.set(userId, {
-      scope: 'summary-channel',
-      step: 'waiting_for_summary_channel_name',
-    });
-
-    this.logger.debug(
-      `State set to waiting_for_summary_channel_name for user ${userId}`,
-    );
-
-    return {
-      message:
-        'Отправьте @username канала, который хотите подключить к channel-summary.',
-    };
-  }
-
-  async handleState(
-    userId: number,
-    text: string,
-    state: UserState,
-  ): Promise<SummaryChannelStateResult> {
-    this.logger.debug(
-      `handleState() for user ${userId}, scope=${state.scope}, step=${state.step}, text="${text}"`,
-    );
-
-    switch (state.step) {
-      case 'waiting_for_summary_channel_name':
-        return this.handleChannelNameInput(userId, text);
-
-      default:
-        this.logger.warn(
-          `Unknown step "${state.step}" for scope "${state.scope}" and user ${userId}`,
-        );
-        return { type: 'none' };
-    }
-  }
-
-  private async handleChannelNameInput(
-    userId: number,
-    rawText: string,
-  ): Promise<SummaryChannelStateResult> {
-    const channelName = rawText.trim();
-
-    if (!channelName.startsWith('@')) {
-      this.logger.warn(
-        `Invalid channel name "${channelName}" from user ${userId}, expected @...`,
-      );
-
-      return { type: 'none' };
-    }
-
-    const existing = this.channelsByUser.get(userId) ?? [];
-    existing.push(channelName);
-    this.channelsByUser.set(userId, existing);
-
-    this.logger.debug(
-      `Channel "${channelName}" added for user ${userId}. Total channels: ${existing.length}`,
-    );
-
-    await this.userStateService.clear(userId);
-
-    return {
-      type: 'channel-added',
-      newChannel: channelName,
-      channels: existing,
-    };
-  }
-
-  async cancelAddChannel(userId: number): Promise<void> {
-    this.logger.debug(
-      `Cancelling add-channel flow for user ${userId}, clearing state`,
-    );
-    await this.userStateService.clear(userId);
-  }
-
-  getChannelsForUser(userId: number): string[] {
-    return this.channelsByUser.get(userId) ?? [];
-  }
-
-  detachChannel(
-    userId: number,
-    channelNameWithAt: string,
-  ): { type: 'detached' } | { type: 'not-found' } {
-    const list = this.channelsByUser.get(userId) ?? [];
-    if (!list.length) {
-      return { type: 'not-found' };
-    }
-
-    const normalized = this.normalizeChannelUsername(channelNameWithAt);
-
-    const idx = list.findIndex(
-      (c) =>
-        this.normalizeChannelUsername(c).toLowerCase() ===
-        normalized.toLowerCase(),
-    );
-
-    if (idx === -1) {
-      return { type: 'not-found' };
-    }
-
-    list.splice(idx, 1);
-    this.channelsByUser.set(userId, list);
-
-    this.logger.debug(
-      `Channel "${normalized}" detached for user ${userId}. Total channels: ${list.length}`,
-    );
-
-    return { type: 'detached' };
-  }
-
-  private normalizeChannelUsername(input: string): string {
-    const raw = (input ?? '').trim();
-    if (!raw) return raw;
-    return raw.startsWith('@') ? raw : `@${raw}`;
-  }
 
   async fetchRecentTextPostsForChannel(
     channelNameWithAt: string,

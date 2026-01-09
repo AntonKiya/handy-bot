@@ -1,9 +1,8 @@
+// src/telegram-bot/features/summary-channel/summary-channel.flow.ts
+
 import { Injectable, Logger } from '@nestjs/common';
 import { Context } from 'telegraf';
-import {
-  SummaryChannelService,
-  SummaryChannelStateResult,
-} from './summary-channel.service';
+import { SummaryChannelService } from './summary-channel.service';
 import { UserState } from '../../../common/state/user-state.service';
 import { SummaryChannelAction } from './summary-channel.callbacks';
 import { MenuService } from '../../core-modules/menu/menu.service';
@@ -14,6 +13,9 @@ import {
   buildSummaryChannelDetachChannelsKeyboard,
 } from './summary-channel.keyboard';
 import { UserStateService } from '../../../common/state/user-state.service';
+import { UserChannelsService } from '../../core-modules/user-channels/user-channels.service';
+import { UserChannelFeature } from '../../core-modules/user-channels/user-channel.entity';
+import { ChannelService } from '../../core-modules/channel/channel.service';
 
 @Injectable()
 export class SummaryChannelFlow {
@@ -21,6 +23,8 @@ export class SummaryChannelFlow {
 
   constructor(
     private readonly summaryChannelService: SummaryChannelService,
+    private readonly userChannelsService: UserChannelsService,
+    private readonly channelService: ChannelService,
     private readonly menuService: MenuService,
     private readonly userStateService: UserStateService,
   ) {}
@@ -70,25 +74,111 @@ export class SummaryChannelFlow {
       return;
     }
 
-    this.logger.debug(
-      `SummaryChannelFlow.handleState for user ${userId}, step: ${state.step}, text: "${text}"`,
-    );
+    const channelUsernameWithAt = this.normalizeChannelUsername(text);
 
-    const result: SummaryChannelStateResult =
-      await this.summaryChannelService.handleState(userId, text, state);
+    let chat: any;
+    try {
+      chat = await ctx.telegram.getChat(channelUsernameWithAt as any);
+    } catch (e: any) {
+      const code = e?.response?.error_code ?? e?.error_code;
+      const desc =
+        e?.response?.description || e?.description || e?.message || '';
 
-    if (result.type === 'channel-added') {
-      // MVP UX: сначала success-сообщение, затем список каналов
+      // Отдельный кейс из практики: бот был кикнут/забанен в канале
+      if (
+        code === 403 &&
+        typeof desc === 'string' &&
+        desc.includes('bot was kicked from the channel chat')
+      ) {
+        await ctx.reply(
+          `❌ Бот не имеет доступа к каналу ${channelUsernameWithAt}.\n\n` +
+            `Похоже, бот был удалён (kicked) из этого канала.\n` +
+            `Добавьте бота обратно и попробуйте снова.`,
+        );
+        return; // state НЕ сбрасываем
+      }
+
       await ctx.reply(
-        `✅ Канал ${result.newChannel} подключён к channel-summary, вы будете получать саммари по нему раз в день (в фиксированное время).`,
+        `❌ Не удалось получить информацию о ${channelUsernameWithAt}.\n\n` +
+          `Убедитесь, что это реальный публичный канал с @username, и попробуйте снова.`,
+      );
+      return; // state НЕ сбрасываем
+    }
+
+    if (!chat || chat.type !== 'channel') {
+      await ctx.reply(
+        `⚠️ ${channelUsernameWithAt} — это не канал.\n\n` +
+          `Пожалуйста, отправьте @username именно публичного канала (chat.type === "channel").`,
+      );
+      return; // state НЕ сбрасываем
+    }
+
+    if (!chat.username) {
+      await ctx.reply(
+        `⚠️ Канал найден, но у него нет @username.\n\n` +
+          `В MVP поддерживаются только публичные каналы с @username. Попробуйте другой канал.`,
+      );
+      return; // state НЕ сбрасываем
+    }
+
+    const telegramChatId = Number(chat.id);
+    const usernameWithoutAt = String(chat.username);
+
+    // A) Channel: upsert
+    await this.channelService.upsertChannelFromTelegram({
+      telegramChatId,
+      username: usernameWithoutAt,
+      discussionGroupChatId: null,
+    });
+
+    // B) UserChannel: upsert/undelete внутри UserChannelsService
+    const result =
+      await this.userChannelsService.attachChannelToUserFeatureByUsername(
+        userId,
+        channelUsernameWithAt,
+        UserChannelFeature.SUMMARY_CHANNEL,
+        false,
       );
 
+    if (result.type === 'channel-not-found') {
+      await ctx.reply(
+        `Канал ${channelUsernameWithAt} не найден в системе.\n\n` +
+          `Попробуйте снова.`,
+      );
+      return; // state НЕ сбрасываем
+    }
+
+    if (result.type === 'already-exists') {
+      await ctx.reply(
+        `Канал ${channelUsernameWithAt} уже подключён к channel-summary.`,
+      );
+      await this.userStateService.clear(userId);
+      await this.showSummaryChannelMenu(ctx);
+      return;
+    }
+
+    if (result.type === 'added') {
+      // MVP UX: сначала success-сообщение, затем список каналов
+      await ctx.reply(
+        `✅ Канал ${channelUsernameWithAt} подключён к channel-summary, вы будете получать саммари по нему раз в день (в фиксированное время).`,
+      );
+
+      await this.userStateService.clear(userId);
       await this.showMyChannels(ctx);
 
       // Текущая логика немедленного саммари остаётся как есть (будем приводить к ТЗ далее)
-      await this.sendChannelSummaries(ctx, result.newChannel);
+      await this.sendChannelSummaries(ctx, channelUsernameWithAt);
       return;
     }
+
+    if (result.type === 'user-not-found') {
+      await ctx.reply(
+        `Пользователь не найден. Пожалуйста, отправьте команду /start и попробуйте снова.`,
+      );
+      return; // state НЕ сбрасываем
+    }
+
+    await ctx.reply('Не удалось подключить канал. Попробуйте позже.');
   }
 
   /**
@@ -148,7 +238,11 @@ export class SummaryChannelFlow {
 
     let canDetach = false;
     if (userId) {
-      const channels = this.summaryChannelService.getChannelsForUser(userId);
+      const channels =
+        await this.userChannelsService.getChannelsForUserByFeature(
+          userId,
+          UserChannelFeature.SUMMARY_CHANNEL,
+        );
       canDetach = channels.length > 0;
     }
 
@@ -169,8 +263,12 @@ export class SummaryChannelFlow {
       return;
     }
 
-    const channels = this.summaryChannelService.getChannelsForUser(userId);
-    const canAdd = channels.length < 1; // UI-поведение как в important-messages (реальный enforce — шаг 2)
+    const channels = await this.userChannelsService.getChannelsForUserByFeature(
+      userId,
+      UserChannelFeature.SUMMARY_CHANNEL,
+    );
+
+    const canAdd = channels.length < 1; // MVP-лимит: 1 канал на пользователя
 
     let text: string;
     if (!channels.length) {
@@ -179,7 +277,11 @@ export class SummaryChannelFlow {
       text =
         '⚠️ Лимит: можно подключить только 1 канал на пользователя.\n\n' +
         'Ваши каналы для channel-summary:\n\n' +
-        channels.map((c) => `• ${this.normalizeChannelUsername(c)}`).join('\n');
+        channels
+          .map((ch) =>
+            ch.username ? `• @${ch.username}` : `• ID: ${ch.telegramChatId}`,
+          )
+          .join('\n');
     }
 
     if (notice) {
@@ -202,9 +304,14 @@ export class SummaryChannelFlow {
       return;
     }
 
-    // UI-лимит (реальный enforce — шаг 2)
-    const channels = this.summaryChannelService.getChannelsForUser(userId);
+    // MVP-лимит: 1 канал на пользователя
+    const channels = await this.userChannelsService.getChannelsForUserByFeature(
+      userId,
+      UserChannelFeature.SUMMARY_CHANNEL,
+    );
+
     if (channels.length >= 1) {
+      // Просто показываем список + только "Назад" (кнопка "Добавить" не нужна)
       await this.showMyChannels(
         ctx,
         '⚠️ Лимит: можно подключить только 1 канал на пользователя.',
@@ -238,7 +345,7 @@ export class SummaryChannelFlow {
     }
 
     // MVP: состояние сбрасываем только по "Назад" на экране ввода
-    await this.summaryChannelService.cancelAddChannel(userId);
+    await this.userStateService.clear(userId);
     await this.showSummaryChannelMenu(ctx);
   }
 
@@ -249,7 +356,11 @@ export class SummaryChannelFlow {
       return;
     }
 
-    const channels = this.summaryChannelService.getChannelsForUser(userId);
+    const channels = await this.userChannelsService.getChannelsForUserByFeature(
+      userId,
+      UserChannelFeature.SUMMARY_CHANNEL,
+    );
+
     if (!channels.length) {
       await this.showSummaryChannelMenu(ctx);
       return;
@@ -266,32 +377,31 @@ export class SummaryChannelFlow {
     }
   }
 
-  private async handleDetachChannel(ctx: Context, usernameRaw?: string) {
+  private async handleDetachChannel(ctx: Context, telegramChatIdRaw?: string) {
     const userId = ctx.from?.id;
     if (!userId) {
       this.logger.warn('handleDetachChannel called without userId');
       return;
     }
 
-    const raw = (usernameRaw ?? '').trim();
-    if (!raw) {
+    const telegramChatId = Number(telegramChatIdRaw);
+    if (!telegramChatIdRaw || Number.isNaN(telegramChatId)) {
       await this.showSummaryChannelMenu(ctx);
       return;
     }
 
-    const channelUsernameWithAt = this.normalizeChannelUsername(raw);
-
-    const result = this.summaryChannelService.detachChannel(
-      userId,
-      channelUsernameWithAt,
-    );
+    const result =
+      await this.userChannelsService.detachChannelFromUserFeatureByTelegramChatId(
+        userId,
+        telegramChatId,
+        UserChannelFeature.SUMMARY_CHANNEL,
+      );
 
     if (result.type === 'detached') {
       await this.showMyChannels(ctx, '✅ Отвязано. Текущий список каналов:');
       return;
     }
 
-    // Если не нашли — просто вернём в меню
     await this.showSummaryChannelMenu(ctx);
   }
 

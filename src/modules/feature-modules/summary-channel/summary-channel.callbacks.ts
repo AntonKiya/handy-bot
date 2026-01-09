@@ -21,8 +21,8 @@ export const SUMMARY_CHANNEL_CB = {
   cancelAddMenu: `${SUMMARY_CHANNEL_NAMESPACE}:${SummaryChannelAction.CancelAddChannelMenu}`,
 
   detachChannelMenu: `${SUMMARY_CHANNEL_NAMESPACE}:${SummaryChannelAction.DetachChannelMenu}`,
-  detachChannel: (channelUsernameWithoutAt: string) =>
-    `${SUMMARY_CHANNEL_NAMESPACE}:${SummaryChannelAction.DetachChannel}:${channelUsernameWithoutAt}`,
+  detachChannel: (telegramChatIdRaw: string) =>
+    `${SUMMARY_CHANNEL_NAMESPACE}:${SummaryChannelAction.DetachChannel}:${telegramChatIdRaw}`,
 
   backMenu: `${SUMMARY_CHANNEL_NAMESPACE}:${SummaryChannelAction.BackMenu}`,
 } as const;

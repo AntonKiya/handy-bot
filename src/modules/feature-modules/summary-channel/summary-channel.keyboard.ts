@@ -1,3 +1,5 @@
+// src/telegram-bot/features/summary-channel/summary-channel.keyboard.ts
+
 import { Markup } from 'telegraf';
 import { SUMMARY_CHANNEL_CB } from './summary-channel.callbacks';
 
@@ -57,14 +59,21 @@ export function buildSummaryChannelAddChannelKeyboard() {
   ]);
 }
 
-export function buildSummaryChannelDetachChannelsKeyboard(channels: string[]) {
+export function buildSummaryChannelDetachChannelsKeyboard(
+  channels: { telegramChatId: string; username?: string | null }[],
+) {
   const rows: any[] = [];
 
   for (const ch of channels) {
-    const normalized = normalizeChannelUsername(ch);
-    const withoutAt = normalized.replace(/^@/, '');
+    const label = ch.username
+      ? normalizeChannelUsername(ch.username)
+      : `ID: ${ch.telegramChatId}`;
+
     rows.push([
-      Markup.button.callback(normalized, SUMMARY_CHANNEL_CB.detachChannel(withoutAt)),
+      Markup.button.callback(
+        label,
+        SUMMARY_CHANNEL_CB.detachChannel(String(ch.telegramChatId)),
+      ),
     ]);
   }
 

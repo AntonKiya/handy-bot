@@ -5,9 +5,17 @@ import { StateModule } from '../../../common/state/state.module';
 import { MenuModule } from '../../core-modules/menu/menu.module';
 import { SummaryChannelAiService } from './summary-channel-ai.service';
 import { AiModule } from '../../../ai/ai.module';
+import { UserChannelsModule } from '../../core-modules/user-channels/user-channels.module';
+import { ChannelModule } from '../../core-modules/channel/channel.module';
 
 @Module({
-  imports: [StateModule, MenuModule, AiModule],
+  imports: [
+    StateModule,
+    MenuModule,
+    AiModule,
+    UserChannelsModule,
+    ChannelModule,
+  ],
   providers: [
     SummaryChannelService,
     SummaryChannelFlow,
