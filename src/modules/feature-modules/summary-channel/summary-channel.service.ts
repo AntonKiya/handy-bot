@@ -301,15 +301,17 @@ export class SummaryChannelService {
   }): string {
     const { channelUsernameWithAt, channelUsername, summaries } = params;
 
+    const title = `<b>Дайджест за последние ${this.HOURS_WINDOW}ч</b>: ${this.escapeHtml(
+      channelUsernameWithAt,
+    )}`;
+
     const blocks = summaries.map((item, idx) => {
       const url = `https://t.me/${channelUsername}/${item.id}`;
-      return `${idx + 1}. ${this.normalizeOneLine(item.summary)}\n${url}`;
+      const summaryText = this.escapeHtml(this.normalizeOneLine(item.summary));
+      return `${idx + 1}. ${summaryText}\n<a href="${url}">К оригинальному посту →</a>`;
     });
 
-    // Минимальный формат дайджеста (без усложнений)
-    return `Дайджест за последние ${this.HOURS_WINDOW}ч: ${channelUsernameWithAt}\n\n${blocks.join(
-      '\n\n',
-    )}`;
+    return `${title}\n\n${blocks.join('\n\n')}`;
   }
 
   async fetchRecentTextPostsForChannel(
@@ -550,5 +552,12 @@ export class SummaryChannelService {
 
     if (current) chunks.push(current);
     return chunks.filter((c) => c.trim().length > 0);
+  }
+
+  private escapeHtml(text: string): string {
+    return (text ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
   }
 }

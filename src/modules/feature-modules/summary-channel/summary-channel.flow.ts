@@ -456,7 +456,10 @@ export class SummaryChannelFlow {
 
     if (res.type === 'success') {
       for (const msg of res.messages) {
-        await ctx.reply(msg);
+        await ctx.reply(msg, {
+          parse_mode: 'HTML',
+          disable_web_page_preview: true,
+        } as any);
       }
       return;
     }
