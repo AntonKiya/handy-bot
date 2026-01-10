@@ -14,6 +14,7 @@ import { ChannelPostsModule } from './modules/core-modules/channel-posts/channel
 import { CoreChannelUsersModule } from './modules/feature-modules/core-channel-users/core-channel-users.module';
 import { TelegramCoreModule } from './telegram-core/telegram-core.module';
 import { HealthcheckModule } from './healthcheck/healthcheck.module';
+import { ScheduleModule } from "@nestjs/schedule";
 
 @Module({
   imports: [
@@ -62,6 +63,7 @@ import { HealthcheckModule } from './healthcheck/healthcheck.module';
     ChannelPostsModule,
     CoreChannelUsersModule,
     HealthcheckModule,
+    ScheduleModule.forRoot(),
   ],
 })
 export class AppModule {}

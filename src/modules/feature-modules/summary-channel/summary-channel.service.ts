@@ -1,6 +1,9 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Inject, Logger } from '@nestjs/common';
 import * as cheerio from 'cheerio';
-import { DataSource } from 'typeorm';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { Telegraf } from 'telegraf';
+
 import {
   SummaryChannelAiService,
   SummaryInputMap,
@@ -10,6 +13,10 @@ import {
   SummaryChannelRunStatus,
 } from './summary-channel-run.entity';
 import { SummaryChannelResultEntity } from './summary-channel-result.entity';
+import {
+  UserChannel,
+  UserChannelFeature,
+} from '../../core-modules/user-channels/user-channel.entity';
 
 export interface ParsedChannelPost {
   id: number;
@@ -23,6 +30,12 @@ type ImmediateRunResult =
   | { type: 'success'; messages: string[] }
   | { type: 'error'; message: string };
 
+type PlannedTarget = {
+  userId: string; // telegram user id (bigint-string)
+  channelTelegramChatId: string; // channel telegram_chat_id (bigint-string)
+  channelUsername: string; // without @
+};
+
 @Injectable()
 export class SummaryChannelService {
   private readonly logger = new Logger(SummaryChannelService.name);
@@ -33,8 +46,39 @@ export class SummaryChannelService {
 
   constructor(
     private readonly summaryChannelAiService: SummaryChannelAiService,
-    private readonly dataSource: DataSource,
+
+    @InjectRepository(SummaryChannelRunEntity)
+    private readonly summaryChannelRunRepository: Repository<SummaryChannelRunEntity>,
+
+    @InjectRepository(SummaryChannelResultEntity)
+    private readonly summaryChannelResultRepository: Repository<SummaryChannelResultEntity>,
+
+    @InjectRepository(UserChannel)
+    private readonly userChannelRepository: Repository<UserChannel>,
+
+    @Inject('TELEGRAF_BOT')
+    private readonly bot: Telegraf,
   ) {}
+
+  /**
+   * Плановый запуск для всех пользователей, у кого подключён канал к SUMMARY_CHANNEL.
+   * Важно: cron вызывает только этот метод.
+   */
+  async runPlannedSummaries(): Promise<void> {
+    const targets = await this.getPlannedTargets();
+    this.logger.log(`Planned summaries targets: ${targets.length}`);
+
+    for (const t of targets) {
+      try {
+        await this.runPlannedSummaryForTarget(t);
+      } catch (e: any) {
+        this.logger.error(
+          `Planned summary failed for userId=${t.userId}, channel=@${t.channelUsername}`,
+          e,
+        );
+      }
+    }
+  }
 
   /**
    * - лимит immediate 1 раз / 24 часа (без next_allowed_at)
@@ -62,13 +106,7 @@ export class SummaryChannelService {
       return limitCheck;
     }
 
-    // 2) Создаём run со статусом running
-    const runRepo = this.dataSource.getRepository(SummaryChannelRunEntity);
-    const resultRepo = this.dataSource.getRepository(
-      SummaryChannelResultEntity,
-    );
-
-    const run = runRepo.create({
+    const run = this.summaryChannelRunRepository.create({
       userId: String(userId),
       channelTelegramChatId: String(channelTelegramChatId),
       isImmediateRun: true,
@@ -79,7 +117,7 @@ export class SummaryChannelService {
 
     let savedRun: SummaryChannelRunEntity;
     try {
-      savedRun = await runRepo.save(run);
+      savedRun = await this.summaryChannelRunRepository.save(run);
     } catch (e: any) {
       this.logger.error('Failed to create summary_channel_runs record', e);
       return {
@@ -95,7 +133,7 @@ export class SummaryChannelService {
       );
 
       if (!posts.length) {
-        await runRepo.update(savedRun.id, {
+        await this.summaryChannelRunRepository.update(savedRun.id, {
           status: SummaryChannelRunStatus.Success,
           error: null,
         });
@@ -112,11 +150,10 @@ export class SummaryChannelService {
 
       // 5) Сохраняем results (bulk)
       if (resultsToStore.length) {
-        await resultRepo.insert(resultsToStore);
+        await this.summaryChannelResultRepository.insert(resultsToStore);
       }
 
-      // 6) Обновляем run → success
-      await runRepo.update(savedRun.id, {
+      await this.summaryChannelRunRepository.update(savedRun.id, {
         status: SummaryChannelRunStatus.Success,
         error: null,
       });
@@ -139,7 +176,7 @@ export class SummaryChannelService {
       );
 
       try {
-        await runRepo.update(savedRun.id, {
+        await this.summaryChannelRunRepository.update(savedRun.id, {
           status: SummaryChannelRunStatus.Failed,
           error: this.safeErrorText(e),
         });
@@ -157,15 +194,195 @@ export class SummaryChannelService {
     }
   }
 
+  private async runPlannedSummaryForTarget(
+    target: PlannedTarget,
+  ): Promise<void> {
+    const userId = String(target.userId);
+    const channelTelegramChatId = String(target.channelTelegramChatId);
+
+    const usernameNoAt = this.normalizeUsernameNoAt(target.channelUsername);
+    if (!usernameNoAt) {
+      this.logger.warn(
+        `Skip planned run: empty channel username for userId=${userId}, channelTelegramChatId=${channelTelegramChatId}`,
+      );
+      return;
+    }
+
+    const channelUsernameWithAt = `@${usernameNoAt}`;
+
+    // Анти-дубли: running или success planned-run за последние 24 часа — пропускаем
+    const skip = await this.shouldSkipPlannedRun({
+      userId,
+      channelTelegramChatId,
+    });
+    if (skip) return;
+
+    const run = this.summaryChannelRunRepository.create({
+      userId,
+      channelTelegramChatId,
+      isImmediateRun: false,
+      startedAt: new Date(),
+      status: SummaryChannelRunStatus.Running,
+      error: null,
+    });
+
+    let savedRun: SummaryChannelRunEntity;
+    try {
+      savedRun = await this.summaryChannelRunRepository.save(run);
+    } catch (e: any) {
+      this.logger.error(
+        `Failed to create planned summary_channel_runs record for userId=${userId}, channel=${channelUsernameWithAt}`,
+        e,
+      );
+      return;
+    }
+
+    try {
+      const posts = await this.fetchRecentTextPostsForChannel(
+        channelUsernameWithAt,
+      );
+
+      // Ничего не шлём пользователю, просто фиксируем успешный run без результатов
+      if (!posts.length) {
+        await this.summaryChannelRunRepository.update(savedRun.id, {
+          status: SummaryChannelRunStatus.Success,
+          error: null,
+        });
+        return;
+      }
+
+      const { summaries, resultsToStore } =
+        await this.summarizeAndPrepareResults(posts, savedRun.id);
+
+      if (resultsToStore.length) {
+        await this.summaryChannelResultRepository.insert(resultsToStore);
+      }
+
+      const digestText = this.buildDigestMessage({
+        channelUsernameWithAt,
+        channelUsername: usernameNoAt,
+        summaries,
+      });
+
+      await this.sendDigestToUser(userId, digestText);
+
+      await this.summaryChannelRunRepository.update(savedRun.id, {
+        status: SummaryChannelRunStatus.Success,
+        error: null,
+      });
+    } catch (e: any) {
+      this.logger.error(
+        `Planned summary failed for userId=${userId}, channel=${channelUsernameWithAt}`,
+        e,
+      );
+
+      try {
+        await this.summaryChannelRunRepository.update(savedRun.id, {
+          status: SummaryChannelRunStatus.Failed,
+          error: this.safeErrorText(e),
+        });
+      } catch (updateErr) {
+        this.logger.error(
+          'Failed to update planned run status to failed',
+          updateErr as any,
+        );
+      }
+    }
+  }
+
+  private async shouldSkipPlannedRun(params: {
+    userId: string;
+    channelTelegramChatId: string;
+  }): Promise<boolean> {
+    const { userId, channelTelegramChatId } = params;
+
+    const running = await this.summaryChannelRunRepository.findOne({
+      where: {
+        userId: String(userId),
+        channelTelegramChatId: String(channelTelegramChatId),
+        isImmediateRun: false,
+        status: SummaryChannelRunStatus.Running,
+      },
+      order: { startedAt: 'DESC' },
+    });
+    if (running) return true;
+
+    const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+    const recentSuccess = await this.summaryChannelRunRepository
+      .createQueryBuilder('r')
+      .where('r.userId = :userId', { userId: String(userId) })
+      .andWhere('r.channelTelegramChatId = :channelTelegramChatId', {
+        channelTelegramChatId: String(channelTelegramChatId),
+      })
+      .andWhere('r.isImmediateRun = false')
+      .andWhere('r.status = :status', {
+        status: SummaryChannelRunStatus.Success,
+      })
+      .andWhere('r.startedAt >= :cutoff', { cutoff })
+      .orderBy('r.startedAt', 'DESC')
+      .getOne();
+
+    return !!recentSuccess;
+  }
+
+  private async getPlannedTargets(): Promise<PlannedTarget[]> {
+    /**
+     * MVP: все user_channels по feature SUMMARY_CHANNEL, где deleted_at IS NULL
+     * и у канала есть username.
+     *
+     * Берём:
+     * - u.telegram_user_id
+     * - c.telegram_chat_id
+     * - c.username
+     */
+    const rows = await this.userChannelRepository
+      .createQueryBuilder('uc')
+      .innerJoin('uc.user', 'u')
+      .innerJoin('uc.channel', 'c')
+      .select('u.telegram_user_id', 'userId')
+      .addSelect('c.telegram_chat_id', 'channelTelegramChatId')
+      .addSelect('c.username', 'channelUsername')
+      .where('uc.feature = :feature', {
+        feature: UserChannelFeature.SUMMARY_CHANNEL,
+      })
+      .andWhere('uc.deleted_at IS NULL')
+      .andWhere('c.username IS NOT NULL')
+      .getRawMany<{
+        userId: string | number;
+        channelTelegramChatId: string | number;
+        channelUsername: string | null;
+      }>();
+
+    return rows
+      .filter((r) => !!r.channelUsername)
+      .map((r) => ({
+        userId: String(r.userId),
+        channelTelegramChatId: String(r.channelTelegramChatId),
+        channelUsername: this.normalizeUsernameNoAt(String(r.channelUsername)),
+      }));
+  }
+
+  private async sendDigestToUser(
+    userId: string,
+    digestHtml: string,
+  ): Promise<void> {
+    const chunks = this.splitTelegramMessage(digestHtml);
+
+    for (const chunk of chunks) {
+      await this.bot.telegram.sendMessage(String(userId), chunk, {
+        parse_mode: 'HTML',
+        disable_web_page_preview: true,
+      } as any);
+    }
+  }
+
   private async checkImmediateLimit(
     userId: number,
   ): Promise<
     Extract<ImmediateRunResult, { type: 'limited' }> | { type: 'ok' }
   > {
-    const runRepo = this.dataSource.getRepository(SummaryChannelRunEntity);
-
-    // Если уже есть running immediate — не даём стартовать ещё раз
-    const running = await runRepo.findOne({
+    const running = await this.summaryChannelRunRepository.findOne({
       where: {
         userId: String(userId),
         isImmediateRun: true,
@@ -182,7 +399,7 @@ export class SummaryChannelService {
       };
     }
 
-    const lastSuccess = await runRepo.findOne({
+    const lastSuccess = await this.summaryChannelRunRepository.findOne({
       where: {
         userId: String(userId),
         isImmediateRun: true,
@@ -236,7 +453,7 @@ export class SummaryChannelService {
       const wc = this.countWords(original);
 
       if (wc > 0 && wc < this.SHORT_WORDS_THRESHOLD) {
-        forcedSummaries[String(p.id)] = original; // <10 слов → оригинал
+        forcedSummaries[String(p.id)] = original;
       } else {
         needAi.push({ ...p, text: original });
       }
@@ -246,6 +463,7 @@ export class SummaryChannelService {
     const aiSummaries: Record<string, string> = {};
 
     const batches = this.chunkArray(needAi, this.LLM_BATCH_SIZE);
+
     for (const batch of batches) {
       const inputMap: SummaryInputMap = {};
       for (const p of batch) {
@@ -368,10 +586,10 @@ export class SummaryChannelService {
         if (!Number.isFinite(id)) return;
         idsOnPage.push(id);
 
-        // Дата поста
         const timeEl = msg.find('.tgme_widget_message_date time');
         const datetime = timeEl.attr('datetime');
         let date: Date | undefined;
+
         if (datetime) {
           date = new Date(datetime);
           if (
@@ -382,10 +600,7 @@ export class SummaryChannelService {
           }
         }
 
-        // Если есть дата и она старше окна, то просто пометим, что можно будет остановиться после страницы
-        if (date && date.getTime() < cutoff) {
-          return;
-        }
+        if (date && date.getTime() < cutoff) return;
 
         // Берём именно основной текст поста, а не текст реплая:
         const textEl = msg
@@ -483,6 +698,12 @@ export class SummaryChannelService {
       const summary = summariesMap[key] ?? p.text.slice(0, 120);
       return { id: p.id, summary };
     });
+  }
+
+  private normalizeUsernameNoAt(username: string): string {
+    const raw = (username ?? '').trim();
+    if (!raw) return '';
+    return raw.startsWith('@') ? raw.slice(1) : raw;
   }
 
   private countWords(text: string): number {

@@ -10,12 +10,16 @@ import { ChannelModule } from '../../core-modules/channel/channel.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { SummaryChannelResultEntity } from './summary-channel-result.entity';
 import { SummaryChannelRunEntity } from './summary-channel-run.entity';
+import { SummaryChannelCron } from './summary-channel.cron';
+import { UserChannel } from '../../core-modules/user-channels/user-channel.entity';
+import { Telegraf } from 'telegraf';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([
       SummaryChannelResultEntity,
       SummaryChannelRunEntity,
+      UserChannel,
     ]),
     StateModule,
     MenuModule,
@@ -24,9 +28,16 @@ import { SummaryChannelRunEntity } from './summary-channel-run.entity';
     ChannelModule,
   ],
   providers: [
+    {
+      provide: 'TELEGRAF_BOT',
+      useFactory: () => {
+        return new Telegraf(process.env.BOT_TOKEN!);
+      },
+    },
     SummaryChannelService,
     SummaryChannelFlow,
     SummaryChannelAiService,
+    SummaryChannelCron,
   ],
   exports: [SummaryChannelFlow],
 })
