@@ -63,13 +63,14 @@ export class CoreChannelUsersService {
    */
   async buildCoreUsersReportForChannel(
     telegramChatId: number,
+    windowDays: number = SYNC_WINDOW_DAYS,
   ): Promise<CoreChannelUsersReportResult> {
     // TODO: TIMEZONE - Некорректная обработка timezone
     // Проблема: В разных окружениях (сервер UTC, локалка в другом timezone) будут разные результаты расчета окон
     // Решение: Явно работать в UTC везде, использовать date-fns с UTC
     const now = new Date();
     const windowTo = now;
-    const windowFrom = new Date(now.getTime() - SYNC_WINDOW_DAYS * MS_PER_DAY);
+    const windowFrom = new Date(now.getTime() - windowDays * MS_PER_DAY);
 
     // 1. Находим канал по telegram_chat_id
     const channel = await this.channelRepo.findOne({
