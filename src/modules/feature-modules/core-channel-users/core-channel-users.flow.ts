@@ -78,6 +78,8 @@ export class CoreChannelUsersFlow {
       }
 
       case CoreChannelUsersAction.Back:
+        // пока не используется (оставили на будущее/унификацию),
+        // но пусть корректно ведёт в выбор периода
         await this.showPeriodSelectMenu(ctx);
         await this.safeAnswerCbQuery(ctx);
         return;
@@ -111,7 +113,6 @@ export class CoreChannelUsersFlow {
     ctx: Context,
     period: CoreChannelUsersPeriod,
   ) {
-    // минимальная валидация периода на уровне UI (полная будет позже)
     if (period !== '14d' && period !== '90d') {
       await this.showPeriodSelectMenu(ctx);
       return;

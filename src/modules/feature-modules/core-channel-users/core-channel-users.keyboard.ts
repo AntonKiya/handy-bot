@@ -12,7 +12,7 @@ const PERIODS: Array<{ label: string; value: CoreChannelUsersPeriod }> = [
 /**
  * Экран выбора периода:
  * - фиксированные периоды
- * - Назад / Главное меню
+ * - только "Главное меню" (т.к. "Назад" вёл бы туда же)
  */
 export function buildCoreUsersPeriodKeyboard() {
   const rows: any[] = [];
@@ -27,9 +27,6 @@ export function buildCoreUsersPeriodKeyboard() {
   }
 
   rows.push([
-    Markup.button.callback('⬅ Назад', CORE_CHANNEL_USERS_CB.mainMenu),
-  ]);
-  rows.push([
     Markup.button.callback('⬅ Главное меню', CORE_CHANNEL_USERS_CB.mainMenu),
   ]);
 
@@ -37,14 +34,12 @@ export function buildCoreUsersPeriodKeyboard() {
 }
 
 /**
- * Экран ввода @channel после выбора периода:
- * - Назад (к выбору периода)
- * - Главное меню
+ * Экран инструкции после выбора периода:
+ * - только "Назад" (возврат к выбору периода)
  */
 export function buildCoreUsersInputKeyboard() {
   return Markup.inlineKeyboard([
     [Markup.button.callback('⬅ Назад', CORE_CHANNEL_USERS_CB.openMenu)],
-    [Markup.button.callback('⬅ Главное меню', CORE_CHANNEL_USERS_CB.mainMenu)],
   ]);
 }
 
