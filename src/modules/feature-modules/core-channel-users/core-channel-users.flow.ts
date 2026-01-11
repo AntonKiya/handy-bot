@@ -1,11 +1,20 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { Context, Markup } from 'telegraf';
+import { Context } from 'telegraf';
 import { MenuService } from '../../core-modules/menu/menu.service';
-import { UserChannelsService } from '../../core-modules/user-channels/user-channels.service';
 import {
   CORE_CHANNEL_USERS_NAMESPACE,
   CoreChannelUsersAction,
+  CoreChannelUsersPeriod,
 } from './core-channel-users.callbacks';
+import {
+  buildCoreUsersInputKeyboard,
+  buildCoreUsersPeriodKeyboard,
+  getCoreUsersPeriodLabel,
+} from './core-channel-users.keyboard';
+import {
+  UserState,
+  UserStateService,
+} from '../../../common/state/user-state.service';
 import { CoreChannelUsersService } from './core-channel-users.service';
 
 @Injectable()
@@ -14,9 +23,139 @@ export class CoreChannelUsersFlow {
 
   constructor(
     private readonly menuService: MenuService,
-    private readonly userChannelsService: UserChannelsService,
+    private readonly userStateService: UserStateService,
     private readonly coreChannelUsersService: CoreChannelUsersService,
   ) {}
+
+  private isMessageNotModifiedError(error: any): boolean {
+    const desc =
+      error?.response?.description ||
+      error?.description ||
+      error?.message ||
+      '';
+    return typeof desc === 'string' && desc.includes('message is not modified');
+  }
+
+  private async safeEditMessageText(
+    ctx: Context,
+    text: string,
+    extra?: Record<string, any>,
+  ) {
+    try {
+      await ctx.editMessageText(text, extra as any);
+    } catch (e: any) {
+      if (this.isMessageNotModifiedError(e)) return;
+      throw e;
+    }
+  }
+
+  private async safeAnswerCbQuery(ctx: Context) {
+    if ('answerCbQuery' in ctx && typeof ctx.answerCbQuery === 'function') {
+      await ctx.answerCbQuery();
+    }
+  }
+
+  private normalizeChannelUsername(input: string): string {
+    const raw = (input ?? '').trim();
+    if (!raw) return raw;
+    return raw.startsWith('@') ? raw : `@${raw}`;
+  }
+
+  private getPeriodDays(period: CoreChannelUsersPeriod): number | null {
+    if (period === '14d') return 14;
+    if (period === '90d') return 90;
+    return null;
+  }
+
+  private async restartWaitingForChannel(
+    ctx: Context,
+    userId: number,
+    period: CoreChannelUsersPeriod,
+    message: string,
+  ) {
+    // текстовый ответ на ошибку → reply ок
+    await ctx.reply(message);
+
+    // затем снова показываем инструкцию + ставим state заново (унификация)
+    await this.showChannelInputInstruction(ctx, period, userId);
+  }
+
+  /**
+   * Публичный метод, который вызывается из TextRouter.
+   * Flow сам проверяет scope/step и отрабатывает только свой state.
+   */
+  async handleState(ctx: Context, text: string, state: UserState) {
+    const userId = ctx.from?.id;
+    if (!userId) return;
+
+    if (state.scope !== 'core-channel-users') return;
+    if (state.step !== 'waiting_for_core_channel_users_channel_name') return;
+
+    const period = state.meta?.period as CoreChannelUsersPeriod | undefined;
+    const periodDays = period ? this.getPeriodDays(period) : null;
+
+    if (!period || !periodDays) {
+      // неконсистентный state → сбрасываем и возвращаем в выбор периода
+      await this.userStateService.clear(userId);
+      await this.showPeriodSelectMenu(ctx);
+      return;
+    }
+
+    const channelUsernameWithAt = this.normalizeChannelUsername(text);
+
+    if (!channelUsernameWithAt || !channelUsernameWithAt.startsWith('@')) {
+      await this.restartWaitingForChannel(
+        ctx,
+        userId,
+        period,
+        '⚠️ Пожалуйста, отправьте @channel_name (например: @my_channel).',
+      );
+      return;
+    }
+
+    // В MVP: состояние закрываем после ввода канала
+    await this.userStateService.clear(userId);
+
+    const runRes =
+      await this.coreChannelUsersService.runImmediateCoreUsersReport({
+        userId,
+        channelUsernameWithAt,
+        period: String(period),
+        windowDays: periodDays,
+      });
+
+    if (runRes.type === 'limited' || runRes.type === 'already-running') {
+      await ctx.reply(runRes.message);
+      return;
+    }
+
+    if (runRes.type === 'error') {
+      // Валидационные ошибки (и любые ошибки до успешного отчёта) — возвращаем в ожидание ввода
+      await this.restartWaitingForChannel(ctx, userId, period, runRes.message);
+      return;
+    }
+
+    const res = runRes.report;
+    const periodLabel = getCoreUsersPeriodLabel(period);
+
+    if (res.type === 'no-data' || !res.items.length) {
+      await ctx.reply(
+        `Отчёт по ядру пользователей сообщества для ${channelUsernameWithAt} за ${periodLabel}.\n\n` +
+          `Нет данных за выбранный период.`,
+      );
+      return;
+    }
+
+    const lines = res.items.map((it) => {
+      const uname = it.username ? `@${it.username}` : '(no username)';
+      return `${uname} | id:${it.telegramUserId} — ${it.commentsCount} комментариев — ${it.postsCount} постов`;
+    });
+
+    await ctx.reply(
+      `Отчёт по ядру пользователей сообщества для ${channelUsernameWithAt} за ${periodLabel}.\n\n` +
+        lines.join('\n'),
+    );
+  }
 
   /**
    * Обработчик всех callback "core-users:*"
@@ -28,216 +167,96 @@ export class CoreChannelUsersFlow {
     );
 
     const parts = data.split(':');
+    const namespace = parts[0];
     const action = parts[1] as CoreChannelUsersAction;
+
+    if (namespace !== CORE_CHANNEL_USERS_NAMESPACE) {
+      await this.safeAnswerCbQuery(ctx);
+      return;
+    }
 
     switch (action) {
       case CoreChannelUsersAction.OpenMenu:
-        return this.showChannelSelectMenu(ctx);
+        await this.showPeriodSelectMenu(ctx);
+        await this.safeAnswerCbQuery(ctx);
+        return;
 
-      case CoreChannelUsersAction.SelectChannelMenu: {
-        const channelId = parts[2];
-        return this.handleChannelSelected(ctx, channelId);
-      }
-
-      case CoreChannelUsersAction.BackMenu:
-        return this.handleBackToMainMenu(ctx);
-
-      default:
-        if ('answerCbQuery' in ctx && typeof ctx.answerCbQuery === 'function') {
-          await ctx.answerCbQuery();
-        }
-    }
-  }
-
-  /**
-   * Экран выбора канала для отчёта по ядру.
-   */
-  private async showChannelSelectMenu(ctx: Context) {
-    const telegramUserId = ctx.from?.id;
-    if (!telegramUserId) {
-      this.logger.warn('showChannelSelectMenu called without telegramUserId');
-      return;
-    }
-
-    this.logger.debug(
-      `CoreChannelUsers: showChannelSelectMenu for user ${telegramUserId}`,
-    );
-
-    const channels =
-      await this.userChannelsService.getChannelsForUser(telegramUserId);
-
-    let text: string;
-    let keyboard;
-
-    if (!channels.length) {
-      text =
-        'У вас пока нет подключённых каналов.\n\n' +
-        'Добавьте бота как администратора в канал, чтобы он появился в списке.';
-
-      keyboard = Markup.inlineKeyboard([
-        [
-          Markup.button.callback(
-            '⬅ Назад',
-            `${CORE_CHANNEL_USERS_NAMESPACE}:${CoreChannelUsersAction.BackMenu}`,
-          ),
-        ],
-      ]);
-    } else {
-      text =
-        'Выберите канал, для которого нужно сформировать отчёт по ядру комментаторов:\n\n' +
-        channels
-          .map((ch) => {
-            const displayName = ch.username
-              ? `@${ch.username}`
-              : `ID: ${ch.telegramChatId}`;
-            return `• ${displayName}`;
-          })
-          .join('\n');
-
-      const buttons = channels.map((ch) => {
-        const displayName = ch.username
-          ? `@${ch.username}`
-          : `ID: ${ch.telegramChatId}`;
-        return [
-          Markup.button.callback(
-            displayName,
-            `${CORE_CHANNEL_USERS_NAMESPACE}:${CoreChannelUsersAction.SelectChannelMenu}:${ch.telegramChatId}`,
-          ),
-        ];
-      });
-
-      buttons.push([
-        Markup.button.callback(
-          '⬅ Назад',
-          `${CORE_CHANNEL_USERS_NAMESPACE}:${CoreChannelUsersAction.BackMenu}`,
-        ),
-      ]);
-
-      keyboard = Markup.inlineKeyboard(buttons);
-    }
-
-    if ('callbackQuery' in ctx && ctx.callbackQuery) {
-      await ctx.editMessageText(text, {
-        ...keyboard,
-      });
-
-      if ('answerCbQuery' in ctx && typeof ctx.answerCbQuery === 'function') {
-        await ctx.answerCbQuery();
-      }
-    } else {
-      await ctx.reply(text, {
-        ...keyboard,
-      });
-    }
-  }
-
-  /**
-   * Пользователь выбрал конкретный канал.
-   * 1) Показываем, что обработка запущена.
-   * 2) Строим отчёт и шлём отдельным сообщением.
-   */
-  private async handleChannelSelected(ctx: Context, channelIdRaw: string) {
-    const telegramUserId = ctx.from?.id;
-    this.logger.debug(
-      `CoreChannelUsers: handleChannelSelected channelId=${channelIdRaw} by user=${telegramUserId}`,
-    );
-
-    const channelIdNum = Number(channelIdRaw);
-    if (!Number.isFinite(channelIdNum)) {
-      this.logger.warn(
-        `CoreChannelUsers: invalid channelId "${channelIdRaw}" received`,
-      );
-      return;
-    }
-
-    const processingText =
-      'Обработка данных по ядру комментаторов для выбранного канала запущена.\n\n' +
-      'Отчёт будет отправлен отдельным сообщением.';
-
-    if ('callbackQuery' in ctx && ctx.callbackQuery) {
-      await ctx.editMessageText(processingText);
-
-      if ('answerCbQuery' in ctx && typeof ctx.answerCbQuery === 'function') {
-        await ctx.answerCbQuery();
-      }
-    } else {
-      await ctx.reply(processingText);
-    }
-
-    // 2) Строим отчёт и шлём результат
-    try {
-      const report =
-        await this.coreChannelUsersService.buildCoreUsersReportForChannel(
-          channelIdNum,
-        );
-
-      if (report.type === 'no-data') {
-        const noDataText =
-          'Пока нет достаточно данных по комментариям за выбранный период.\n\n' +
-          `Окно анализа: с ${report.windowFrom.toLocaleDateString()} по ${report.windowTo.toLocaleDateString()}.`;
-
-        await ctx.reply(noDataText);
+      case CoreChannelUsersAction.SelectPeriod: {
+        const period = parts[2] as CoreChannelUsersPeriod;
+        await this.showChannelInputInstruction(ctx, period, userId);
+        await this.safeAnswerCbQuery(ctx);
         return;
       }
 
-      const { items, windowFrom, windowTo, syncedWithTelegram } = report;
+      case CoreChannelUsersAction.Back:
+        // MVP: Back закрывает state и возвращает к выбору периода
+        if (userId) await this.userStateService.clear(userId);
+        await this.showPeriodSelectMenu(ctx);
+        await this.safeAnswerCbQuery(ctx);
+        return;
 
-      const headerLines: string[] = [];
+      case CoreChannelUsersAction.MainMenu:
+        if (userId) await this.userStateService.clear(userId);
+        await this.handleBackToMainMenu(ctx);
+        await this.safeAnswerCbQuery(ctx);
+        return;
 
-      headerLines.push(
-        `Ядро комментаторов за период с ${windowFrom.toLocaleDateString()} по ${windowTo.toLocaleDateString()}.`,
-      );
-
-      if (syncedWithTelegram) {
-        headerLines.push('Данные только что обновлены по последним постам.');
-      } else {
-        headerLines.push(
-          'Показаны данные из последней синхронизации (лимит по частоте синка).',
-        );
-      }
-
-      headerLines.push('');
-      headerLines.push('Топ комментаторов (по числу комментариев):');
-      headerLines.push('');
-
-      const lines: string[] = [];
-
-      items.forEach((item, idx) => {
-        const avg = item.avgCommentsPerActivePost.toFixed(2);
-
-        // Отображаем username если есть, иначе ID
-        // TODO: Учесть возможное изменение имени.
-        // Если пользователь изменит свой username в Telegram после последней синхронизации,
-        // в отчёте будет отображаться старый username до следующей синхронизации комментариев этого пользователя.
-        // Также если username был удалён пользователем, мы продолжим показывать старый username.
-        const userLabel = item.username
-          ? `@${item.username}`
-          : `ID: ${item.telegramUserId}`;
-
-        lines.push(
-          `${idx + 1}. ${userLabel} — ${item.commentsCount} комментариев ` +
-            `(в ${item.postsCount} постах, в среднем ${avg} комментария на пост, где этот пользователь был активен).`,
-        );
-      });
-
-      const messageText = [...headerLines, ...lines].join('\n');
-
-      await ctx.reply(messageText);
-    } catch (e) {
-      this.logger.error(
-        `CoreChannelUsers: failed to build report for channelId=${channelIdRaw}`,
-        e as any,
-      );
-
-      await ctx.reply(
-        'Не удалось сформировать отчёт по ядру комментаторов. Попробуйте позже.',
-      );
+      default:
+        await this.safeAnswerCbQuery(ctx);
+        return;
     }
   }
 
-  /**
-   * Назад в главное меню
-   */
+  private async showPeriodSelectMenu(ctx: Context) {
+    const text =
+      'Ядро пользователей сообщества\n\n' +
+      'Выберите период, за который нужно сформировать отчёт:';
+
+    const keyboard = buildCoreUsersPeriodKeyboard();
+
+    if ('callbackQuery' in ctx && ctx.callbackQuery) {
+      await this.safeEditMessageText(ctx, text, { ...keyboard });
+    } else {
+      await ctx.reply(text, { ...keyboard });
+    }
+  }
+
+  private async showChannelInputInstruction(
+    ctx: Context,
+    period: CoreChannelUsersPeriod,
+    userId?: number,
+  ) {
+    const periodDays = this.getPeriodDays(period);
+    if (!periodDays) {
+      await this.showPeriodSelectMenu(ctx);
+      return;
+    }
+
+    if (userId) {
+      await this.userStateService.set(userId, {
+        scope: 'core-channel-users',
+        step: 'waiting_for_core_channel_users_channel_name',
+        meta: { period },
+      });
+    }
+
+    const periodLabel = getCoreUsersPeriodLabel(period);
+
+    const text =
+      `Вы выбрали период: ${periodLabel}.\n\n` +
+      `⚠️ Отчёт можно генерировать только 1 раз в 24 часа (на пользователя).\n` +
+      `Исключение: если последний запуск завершился со статусом "failed", повторный запуск разрешён сразу.\n\n` +
+      `Отправьте @channel_name чтобы продолжить генерацию отчёта (только публичные каналы).`;
+
+    const keyboard = buildCoreUsersInputKeyboard();
+
+    if ('callbackQuery' in ctx && ctx.callbackQuery) {
+      await this.safeEditMessageText(ctx, text, { ...keyboard });
+    } else {
+      await ctx.reply(text, { ...keyboard });
+    }
+  }
+
   private async handleBackToMainMenu(ctx: Context) {
     const userId = ctx.from?.id;
     this.logger.debug(
@@ -245,9 +264,5 @@ export class CoreChannelUsersFlow {
     );
 
     await this.menuService.redrawMainMenu(ctx);
-
-    if ('answerCbQuery' in ctx && typeof ctx.answerCbQuery === 'function') {
-      await ctx.answerCbQuery();
-    }
   }
 }

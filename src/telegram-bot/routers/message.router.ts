@@ -5,6 +5,7 @@ import { SummaryChannelFlow } from '../../modules/feature-modules/summary-channe
 import { ImportantMessagesFlow } from '../../modules/feature-modules/important-messages/important-messages.flow';
 import { GroupMessageData } from '../utils/types';
 import { UserService } from '../../modules/core-modules/user/user.service';
+import { CoreChannelUsersFlow } from '../../modules/feature-modules/core-channel-users/core-channel-users.flow';
 
 @Injectable()
 export class MessageRouter {
@@ -14,6 +15,7 @@ export class MessageRouter {
     private readonly userStateService: UserStateService,
     private readonly summaryChannelFlow: SummaryChannelFlow,
     private readonly importantMessagesFlow: ImportantMessagesFlow,
+    private readonly coreChannelUsersFlow: CoreChannelUsersFlow,
     private readonly userService: UserService,
   ) {}
 
@@ -92,6 +94,9 @@ export class MessageRouter {
 
       case 'important-messages':
         return this.importantMessagesFlow.handleState(ctx, text, state);
+
+      case 'core-channel-users':
+        return this.coreChannelUsersFlow.handleState(ctx, text, state);
 
       default:
         this.logger.warn(
