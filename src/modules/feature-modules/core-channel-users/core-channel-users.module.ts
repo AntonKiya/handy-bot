@@ -12,6 +12,7 @@ import { UserChannelsModule } from '../../core-modules/user-channels/user-channe
 import { TelegramCoreModule } from '../../../telegram-core/telegram-core.module';
 import { Channel } from '../../core-modules/channel/channel.entity';
 import { StateModule } from '../../../common/state/state.module';
+import { CoreChannelUsersRunEntity } from './core-channel-users-run.entity';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { StateModule } from '../../../common/state/state.module';
       User,
       CoreChannelUsersChannelSync,
       Channel,
+      CoreChannelUsersRunEntity,
     ]),
     StateModule,
     MenuModule,

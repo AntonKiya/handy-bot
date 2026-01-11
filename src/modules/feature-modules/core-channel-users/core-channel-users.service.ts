@@ -21,6 +21,10 @@ import {
   MEDIUM_POST_DAYS,
   MEDIUM_RESYNC_INTERVAL_MS,
 } from './core-channel-users.constants';
+import {
+  CoreChannelUsersRunEntity,
+  CoreChannelUsersRunStatus,
+} from './core-channel-users-run.entity';
 
 export interface CoreUserReportItem {
   telegramUserId: number;
@@ -38,9 +42,20 @@ export type CoreChannelUsersReportResult = {
   windowTo: Date;
 };
 
+export type CoreChannelUsersImmediateRunResult =
+  | { type: 'limited'; message: string; nextAllowedAt: Date }
+  | { type: 'already-running'; message: string }
+  | { type: 'success'; report: CoreChannelUsersReportResult; runId: string }
+  | { type: 'error'; message: string };
+
 @Injectable()
 export class CoreChannelUsersService {
   private readonly logger = new Logger(CoreChannelUsersService.name);
+
+  // Коммит 5: лимит по user_id
+  private readonly USER_LIMIT_WINDOW_MS = 24 * 60 * 60 * 1000;
+  // Защита от дублей: если последний run=running и "свежий" — считаем уже запущено
+  private readonly RUNNING_FRESH_MS = 20 * 60 * 1000;
 
   constructor(
     @InjectRepository(Channel)
@@ -51,8 +66,164 @@ export class CoreChannelUsersService {
     private readonly commentRepo: Repository<CoreChannelUsersComment>,
     @InjectRepository(CoreChannelUsersChannelSync)
     private readonly channelSyncRepo: Repository<CoreChannelUsersChannelSync>,
+
+    @InjectRepository(CoreChannelUsersRunEntity)
+    private readonly runRepo: Repository<CoreChannelUsersRunEntity>,
+
     private readonly telegramCoreService: TelegramCoreService,
   ) {}
+
+  /**
+   * Коммит 5 — доменный метод запуска отчёта:
+   * - check-limit: 1 раз / 24 часа на user_id (по последнему run: max created_at)
+   * - запись run: started(running) -> success/failed
+   */
+  async runImmediateCoreUsersReport(params: {
+    userId: number;
+    channelTelegramChatId: number;
+    channelUsernameWithAt: string; // "@channel"
+    period: string; // "14d" | "90d"
+    windowDays: number;
+  }): Promise<CoreChannelUsersImmediateRunResult> {
+    const {
+      userId,
+      channelTelegramChatId,
+      channelUsernameWithAt,
+      period,
+      windowDays,
+    } = params;
+
+    const limitCheck = await this.checkImmediateLimitByUser(userId);
+    if (limitCheck.type !== 'ok') {
+      return limitCheck;
+    }
+
+    const now = new Date();
+
+    const run = this.runRepo.create({
+      userId: String(userId),
+      channelTelegramChatId: String(channelTelegramChatId),
+      channelUsername: String(channelUsernameWithAt),
+      period: String(period),
+      startedAt: now,
+      status: CoreChannelUsersRunStatus.Running,
+      error: null,
+    });
+
+    let savedRun: CoreChannelUsersRunEntity;
+    try {
+      savedRun = await this.runRepo.save(run);
+    } catch (e: any) {
+      this.logger.error('Failed to create core_channel_users_runs record', e);
+      return {
+        type: 'error',
+        message: 'Не удалось запустить генерацию отчёта. Попробуйте позже.',
+      };
+    }
+
+    try {
+      const report = await this.buildCoreUsersReportForChannel(
+        channelTelegramChatId,
+        windowDays,
+      );
+
+      await this.runRepo.update(savedRun.id, {
+        status: CoreChannelUsersRunStatus.Success,
+        error: null,
+      });
+
+      return { type: 'success', report, runId: savedRun.id };
+    } catch (e: any) {
+      this.logger.error(
+        `Core users report failed for userId=${userId}, channel=${channelUsernameWithAt}, period=${period}`,
+        e,
+      );
+
+      try {
+        await this.runRepo.update(savedRun.id, {
+          status: CoreChannelUsersRunStatus.Failed,
+          error: this.safeErrorText(e),
+        });
+      } catch (updateErr: any) {
+        this.logger.error('Failed to update run status=failed', updateErr);
+      }
+
+      return {
+        type: 'error',
+        message: 'Не удалось сформировать отчёт. Попробуйте позже.',
+      };
+    }
+  }
+
+  private async checkImmediateLimitByUser(
+    userId: number,
+  ): Promise<
+    | { type: 'ok' }
+    | Extract<
+        CoreChannelUsersImmediateRunResult,
+        { type: 'limited' | 'already-running' }
+      >
+  > {
+    const last = await this.runRepo.findOne({
+      where: { userId: String(userId) },
+      order: { createdAt: 'DESC' }, // строго по ТЗ: max created_at
+    });
+
+    if (!last) return { type: 'ok' };
+
+    const nowMs = Date.now();
+    const lastCreatedMs = last.createdAt?.getTime?.() ?? 0;
+
+    // "already running" (fresh)
+    if (
+      last.status === CoreChannelUsersRunStatus.Running &&
+      lastCreatedMs > 0 &&
+      nowMs - lastCreatedMs < this.RUNNING_FRESH_MS
+    ) {
+      return {
+        type: 'already-running',
+        message:
+          '⏳ Отчёт уже формируется. Подождите немного и попробуйте снова.',
+      };
+    }
+
+    const nextAllowedAt = new Date(lastCreatedMs + this.USER_LIMIT_WINDOW_MS);
+
+    // строго по ТЗ: если now < next_allowed_at и last.status != failed → limited
+    if (
+      nowMs < nextAllowedAt.getTime() &&
+      last.status !== CoreChannelUsersRunStatus.Failed
+    ) {
+      const remainingMs = nextAllowedAt.getTime() - nowMs;
+      const wait = this.formatDuration(remainingMs);
+
+      return {
+        type: 'limited',
+        nextAllowedAt,
+        message:
+          `⚠️ Отчёт можно генерировать только 1 раз в 24 часа (на пользователя).\n\n` +
+          `Попробуйте снова через ${wait}.`,
+      };
+    }
+
+    return { type: 'ok' };
+  }
+
+  private formatDuration(ms: number): string {
+    const totalMinutes = Math.max(1, Math.ceil(ms / 60000));
+    const h = Math.floor(totalMinutes / 60);
+    const m = totalMinutes % 60;
+
+    if (h <= 0) return `${m}м`;
+    if (m === 0) return `${h}ч`;
+    return `${h}ч ${m}м`;
+  }
+
+  private safeErrorText(e: any): string {
+    const desc = e?.response?.description || e?.description || e?.message || '';
+    const s = typeof desc === 'string' ? desc : 'unknown error';
+    return s.slice(0, 2000);
+  }
 
   /**
    * Строит отчёт по ядру комментаторов для канала:

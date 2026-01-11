@@ -103,8 +103,6 @@ export class CoreChannelUsersFlow {
 
     const channelUsernameWithAt = this.normalizeChannelUsername(text);
 
-    console.log('channelUsernameWithAt', channelUsernameWithAt);
-
     if (!channelUsernameWithAt || !channelUsernameWithAt.startsWith('@')) {
       await this.restartWaitingForChannel(
         ctx,
@@ -162,16 +160,29 @@ export class CoreChannelUsersFlow {
       return;
     }
 
-    // В MVP: состояние закрываем после ввода канала (дальше будет запуск отчёта/валидации)
+    // В MVP: состояние закрываем после ввода канала
     await this.userStateService.clear(userId);
 
-    // ВРЕМЕННО: используем текущую реализацию отчёта, но уже с выбранным периодом.
-    const res =
-      await this.coreChannelUsersService.buildCoreUsersReportForChannel(
-        telegramChatIdNumber,
-        periodDays,
-      );
+    const runRes =
+      await this.coreChannelUsersService.runImmediateCoreUsersReport({
+        userId,
+        channelTelegramChatId: telegramChatIdNumber,
+        channelUsernameWithAt,
+        period: String(period),
+        windowDays: periodDays,
+      });
 
+    if (runRes.type === 'limited' || runRes.type === 'already-running') {
+      await ctx.reply(runRes.message);
+      return;
+    }
+
+    if (runRes.type === 'error') {
+      await ctx.reply(runRes.message);
+      return;
+    }
+
+    const res = runRes.report;
     const periodLabel = getCoreUsersPeriodLabel(period);
 
     if (res.type === 'no-data' || !res.items.length) {
