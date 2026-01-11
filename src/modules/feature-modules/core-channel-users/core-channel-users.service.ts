@@ -15,9 +15,10 @@ import {
 } from './core-channel-users.constants';
 import {
   extractAuthorPeerId,
+  extractReplyToMsgId,
   extractThreadRootId,
-  tgDateToDate,
   extractSenderUsername,
+  tgDateToDate,
 } from './core-channel-users.telegram.helpers';
 
 export interface CoreUserReportItem {
@@ -30,7 +31,6 @@ export interface CoreUserReportItem {
 
 export type CoreChannelUsersReportResult = {
   type: 'ok' | 'no-data';
-  // пока оставляем поле как есть (в коммитах 7–8 может поменяться/исчезнуть)
   syncedWithTelegram: boolean;
   items: CoreUserReportItem[];
   windowFrom: Date;
@@ -52,10 +52,9 @@ class CoreChannelUsersValidationError extends Error {
 
 type ValidatedChannel = {
   channelId: string;
-  channelUsernameWithAt: string; // canonical @username из Core
+  channelUsernameWithAt: string;
   discussionGroupId: string;
 
-  // Коммит 7: чтобы не пытаться заново резолвить access_hash по linked_chat_id
   channelInputPeer: any;
   discussionInputPeer: any;
 };
@@ -71,10 +70,16 @@ type AuthorAgg = {
 export class CoreChannelUsersService {
   private readonly logger = new Logger(CoreChannelUsersService.name);
 
-  // Коммит 5: лимит по user_id
   private readonly USER_LIMIT_WINDOW_MS = 24 * 60 * 60 * 1000;
-  // Защита от дублей: если последний run=running и "свежий" — считаем уже запущено
   private readonly RUNNING_FRESH_MS = 20 * 60 * 1000;
+
+  // чтобы не утонуть в логах
+  private readonly DEBUG_SAMPLE_MESSAGES = 25;
+  private readonly DEBUG_SAMPLE_RESOLVES = 25;
+
+  // важно для nested replies, когда topId отсутствует:
+  // идём вверх по reply-цепочке и ищем автофорвард из канала
+  private readonly MAX_REPLY_CHAIN_STEPS = 25;
 
   constructor(
     @InjectRepository(CoreChannelUsersRunEntity)
@@ -82,19 +87,6 @@ export class CoreChannelUsersService {
     private readonly telegramCoreService: TelegramCoreService,
   ) {}
 
-  /**
-   * Коммит 6:
-   * - Валидация канала и наличия discussion group делается через Core API (GramJS)
-   * - НЕ используем Bot API getChat и НЕ используем channels/channel_posts/comments таблицы
-   *
-   * Коммит 5:
-   * - check-limit: 1 раз / 24 часа на user_id (по последнему run: max created_at)
-   * - запись run: running -> success/failed
-   *
-   * Коммит 7:
-   * - реальный сбор комментариев из discussion group
-   * - фильтрация только комментариев, относящихся к тредам постов канала (messages.getDiscussionMessage + cache)
-   */
   async runImmediateCoreUsersReport(params: {
     userId: number;
     channelUsernameWithAt: string; // "@channel"
@@ -104,9 +96,7 @@ export class CoreChannelUsersService {
     const { userId, channelUsernameWithAt, period, windowDays } = params;
 
     const limitCheck = await this.checkImmediateLimitByUser(userId);
-    if (limitCheck.type !== 'ok') {
-      return limitCheck;
-    }
+    if (limitCheck.type !== 'ok') return limitCheck;
 
     let validated: ValidatedChannel;
 
@@ -127,9 +117,13 @@ export class CoreChannelUsersService {
         );
       }
 
-      // ВАЖНО: на валидационных ошибках run НЕ создаём (не сжигаем лимит)
       return { type: 'error', message };
     }
+
+    this.logger.debug(
+      `[core-users] validated: channel=${validated.channelUsernameWithAt} channelId=${validated.channelId} discussionGroupId=${validated.discussionGroupId} ` +
+        `channelPeer=${validated.channelInputPeer?.className ?? 'unknown'} discussionPeer=${validated.discussionInputPeer?.className ?? 'unknown'}`,
+    );
 
     const now = new Date();
 
@@ -188,9 +182,6 @@ export class CoreChannelUsersService {
     }
   }
 
-  /**
-   * Коммит 7 — сбор из discussion group + фильтрация только тредов постов канала.
-   */
   private async buildCoreUsersReportFromDiscussionGroup(params: {
     validated: ValidatedChannel;
     windowDays: number;
@@ -203,7 +194,23 @@ export class CoreChannelUsersService {
 
     const client = await this.telegramCoreService.getClient();
 
-    const threadToChannelPostIdCache = new Map<number, number | null>();
+    // sanity — чтобы понимать, что канал читается
+    try {
+      const ch = await client.getMessages(validated.channelInputPeer, {
+        limit: 1,
+      });
+      const m0 = ch?.[0] as any;
+      this.logger.debug(
+        `[core-users] sanity channel last: ok=${Boolean(m0)} id=${m0?.id ?? 'n/a'} date=${m0?.date ? tgDateToDate(m0.date).toISOString() : 'n/a'}`,
+      );
+    } catch (e: any) {
+      this.logger.warn(
+        `[core-users] sanity channel last: FAILED (${this.safeErrorText(e)})`,
+      );
+    }
+
+    // cache: messageId_in_discussion -> channelPostId (или null если не относится к посту канала)
+    const msgIdToChannelPostIdCache = new Map<number, number | null>();
     const authorCache = new Map<string, { username: string | null }>();
     const agg = new Map<string, AuthorAgg>();
 
@@ -211,8 +218,12 @@ export class CoreChannelUsersService {
     let offsetId = 0;
     let stopByWindow = false;
 
+    let debugMsgPrinted = 0;
+    let debugResolvePrinted = 0;
+
     this.logger.debug(
-      `CoreChannelUsers: scanning discussion group messages. channel=${validated.channelUsernameWithAt}, discussionGroupId=${validated.discussionGroupId}, windowFrom=${windowFrom.toISOString()}`,
+      `[core-users] scan start: channel=${validated.channelUsernameWithAt} discussionGroupId=${validated.discussionGroupId} ` +
+        `windowFrom=${windowFrom.toISOString()} windowTo=${windowTo.toISOString()} batchLimit=${DISCUSSION_BATCH_LIMIT} maxScan=${MAX_DISCUSSION_MESSAGES_SCAN}`,
     );
 
     while (!stopByWindow) {
@@ -221,19 +232,27 @@ export class CoreChannelUsersService {
         offsetId,
       });
 
-      if (!messages || messages.length === 0) {
-        break;
-      }
+      if (!messages || messages.length === 0) break;
+
+      const first = messages[0] as any;
+      const last = messages[messages.length - 1] as any;
+
+      this.logger.debug(
+        `[core-users] batch: offsetId=${offsetId} got=${messages.length} ` +
+          `firstId=${first?.id ?? 'n/a'} firstDate=${first?.date ? tgDateToDate(first.date).toISOString() : 'n/a'} ` +
+          `lastId=${last?.id ?? 'n/a'} lastDate=${last?.date ? tgDateToDate(last.date).toISOString() : 'n/a'}`,
+      );
 
       for (const m of messages) {
         const msg = m as Api.Message;
-        if (!msg || typeof (msg as any).id !== 'number') continue;
+        const msgId = Number((msg as any)?.id);
+
+        if (!msg || !Number.isFinite(msgId) || msgId <= 0) continue;
 
         scanned += 1;
         if (scanned > MAX_DISCUSSION_MESSAGES_SCAN) {
-          // safety: не даём бесконечно скроллить
           this.logger.warn(
-            `CoreChannelUsers: scan safety stop. scanned>${MAX_DISCUSSION_MESSAGES_SCAN}`,
+            `[core-users] scan safety stop. scanned>${MAX_DISCUSSION_MESSAGES_SCAN}`,
           );
           stopByWindow = true;
           break;
@@ -241,44 +260,83 @@ export class CoreChannelUsersService {
 
         const commentedAt = tgDateToDate((msg as any).date);
 
-        // строго по ТЗ: останавливаемся, когда встречаем сообщения старше окна
+        // строго по ТЗ: останавливаемся на первом сообщении старше окна
         if (commentedAt < windowFrom) {
+          this.logger.debug(
+            `[core-users] stopByWindow: msg#${msgId} date=${commentedAt.toISOString()} < windowFrom=${windowFrom.toISOString()}`,
+          );
           stopByWindow = true;
           break;
         }
 
-        // 7.3: отбрасываем “левые” — если не в треде
+        // candidateId = replyToTopId ?? replyToMsgId
         const threadRootId = extractThreadRootId(msg);
         if (!threadRootId) {
+          if (debugMsgPrinted < this.DEBUG_SAMPLE_MESSAGES) {
+            const r: any = (msg as any)?.replyTo ?? null;
+            const top =
+              r?.replyToTopId ?? r?.topMsgId ?? r?.top ?? r?.reply_to_top_id;
+            const direct =
+              r?.replyToMsgId ?? r?.reply_to_msg_id ?? r?.msgId ?? r?.msg;
+            this.logger.debug(
+              `[core-users] msg#${msgId} date=${commentedAt.toISOString()} skip(no-reply) replyTo=${r ? `top=${top ?? 'null'}, msg=${direct ?? 'null'}` : 'null'}`,
+            );
+            debugMsgPrinted += 1;
+          }
           continue;
         }
 
-        // 7.3: threadRootId -> channel post id через messages.getDiscussionMessage (кешируем)
-        const channelPostId = await this.resolveChannelPostIdForThreadRoot({
-          client,
-          channelId: validated.channelId,
-          discussionPeer: validated.discussionInputPeer,
-          threadRootId,
-          cache: threadToChannelPostIdCache,
-        });
-
-        if (!channelPostId) {
-          continue;
-        }
-
-        // автор
         const authorPeer = extractAuthorPeerId(msg);
         if (!authorPeer) continue;
 
-        const authorIdStr = authorPeer.id;
-        const authorIdNum = Number(authorIdStr);
-
-        // TODO: BIGINT — если когда-нибудь authorId > MAX_SAFE_INTEGER, будет проблема точности.
-        if (!Number.isFinite(authorIdNum) || authorIdNum <= 0) {
+        // отчёт по пользователям — считаем только user
+        if (authorPeer.type !== 'user') {
+          if (debugMsgPrinted < this.DEBUG_SAMPLE_MESSAGES) {
+            this.logger.debug(
+              `[core-users] msg#${msgId} date=${commentedAt.toISOString()} skip(author-not-user) author=${authorPeer.type}:${authorPeer.id} threadCandidate=${threadRootId}`,
+            );
+            debugMsgPrinted += 1;
+          }
           continue;
         }
 
-        // username (кешируем по authorId)
+        if (debugMsgPrinted < this.DEBUG_SAMPLE_MESSAGES) {
+          const r: any = (msg as any)?.replyTo ?? null;
+          const top =
+            r?.replyToTopId ?? r?.topMsgId ?? r?.top ?? r?.reply_to_top_id;
+          const direct =
+            r?.replyToMsgId ?? r?.reply_to_msg_id ?? r?.msgId ?? r?.msg;
+          this.logger.debug(
+            `[core-users] msg#${msgId} date=${commentedAt.toISOString()} author=user:${authorPeer.id} threadCandidate=${threadRootId} replyTo=top=${top ?? 'null'} msg=${direct ?? 'null'}`,
+          );
+          debugMsgPrinted += 1;
+        }
+
+        // КЛЮЧЕВО: резолвим channelPostId даже если top отсутствует
+        // поднимаясь по reply-цепочке до автофорварда из канала
+        const channelPostId = await this.resolveChannelPostIdByReplyChain({
+          client,
+          channelId: validated.channelId,
+          discussionPeer: validated.discussionInputPeer,
+          startMsgId: threadRootId,
+          cache: msgIdToChannelPostIdCache,
+          debug: debugResolvePrinted < this.DEBUG_SAMPLE_RESOLVES,
+        });
+
+        if (debugResolvePrinted < this.DEBUG_SAMPLE_RESOLVES) {
+          this.logger.debug(
+            `[core-users] map: start=${threadRootId} -> channelPostId=${channelPostId}`,
+          );
+          debugResolvePrinted += 1;
+        }
+
+        if (!channelPostId) continue;
+
+        const authorIdStr = authorPeer.id;
+        const authorIdNum = Number(authorIdStr);
+        if (!Number.isFinite(authorIdNum) || authorIdNum <= 0) continue;
+
+        // username cache
         let authorUsername: string | null = null;
         const cachedAuthor = authorCache.get(authorIdStr);
         if (cachedAuthor) {
@@ -288,7 +346,6 @@ export class CoreChannelUsersService {
           authorCache.set(authorIdStr, { username: authorUsername });
         }
 
-        // агрегация
         const existing = agg.get(authorIdStr);
         if (!existing) {
           agg.set(authorIdStr, {
@@ -299,31 +356,29 @@ export class CoreChannelUsersService {
           });
         } else {
           existing.commentsCount += 1;
-
-          // если username ранее был null, а сейчас появился — обновим
-          if (!existing.username && authorUsername) {
+          if (!existing.username && authorUsername)
             existing.username = authorUsername;
-          }
-
           existing.postIds.add(channelPostId);
         }
       }
 
-      const last = messages[messages.length - 1] as Api.Message;
-      if (!last || typeof (last as any).id !== 'number') break;
+      const lastMsg = messages[messages.length - 1] as any;
+      const lastId = Number(lastMsg?.id);
+      if (!Number.isFinite(lastId) || lastId <= 0) break;
 
-      offsetId = (last as any).id;
+      offsetId = lastId;
 
-      if (messages.length < DISCUSSION_BATCH_LIMIT) {
-        break;
-      }
+      if (messages.length < DISCUSSION_BATCH_LIMIT) break;
     }
+
+    this.logger.debug(
+      `[core-users] scan done: scanned=${scanned} uniqueAuthors=${agg.size} cachedMsgIds=${msgIdToChannelPostIdCache.size}`,
+    );
 
     const items = Array.from(agg.values())
       .map((x) => {
         const postsCount = x.postIds.size;
         const avg = postsCount > 0 ? x.commentsCount / postsCount : 0;
-
         return {
           telegramUserId: x.telegramUserId,
           username: x.username,
@@ -358,7 +413,6 @@ export class CoreChannelUsersService {
     msg: Api.Message,
   ): Promise<string | null> {
     try {
-      // GramJS умеет резолвить sender; может быть Api.User / Api.Channel
       const sender = await (msg as any).getSender?.();
       return extractSenderUsername(sender);
     } catch {
@@ -367,72 +421,123 @@ export class CoreChannelUsersService {
   }
 
   /**
-   * Коммит 7 — threadRootId -> channel post id
-   * Используем messages.getDiscussionMessage и кешируем результаты.
+   * Ищем channelPostId по reply-цепочке:
+   * startMsgId -> (fetch msg) -> если автофорвард из нужного канала => берём fwdFrom.channelPost
+   * иначе -> идём выше по replyToMsgId, пока не найдём root или не упремся.
    *
-   * ВАЖНО:
-   * - peer для GetDiscussionMessage = discussion group (а не канал)
-   * - в ответе ищем сообщение, которое относится к каналу (peerId.channelId == channelId)
+   * Это закрывает кейс "ответы на ответы", когда replyToTopId отсутствует (как у тебя в логах).
    */
-  private async resolveChannelPostIdForThreadRoot(params: {
+  private async resolveChannelPostIdByReplyChain(params: {
     client: any;
     channelId: string;
     discussionPeer: any;
-    threadRootId: number;
+    startMsgId: number;
     cache: Map<number, number | null>;
+    debug: boolean;
   }): Promise<number | null> {
-    const { client, channelId, discussionPeer, threadRootId, cache } = params;
+    const { client, channelId, discussionPeer, startMsgId, cache, debug } =
+      params;
 
-    const cached = cache.get(threadRootId);
-    if (cached !== undefined) {
-      return cached;
-    }
+    const cached0 = cache.get(startMsgId);
+    if (cached0 !== undefined) return cached0;
 
-    try {
-      const res = await client.invoke(
-        new Api.messages.GetDiscussionMessage({
-          peer: discussionPeer,
-          msgId: threadRootId,
-        }),
-      );
+    const visited: number[] = [];
+    let currentId: number | null = startMsgId;
 
-      const messages: any[] = (res as any)?.messages ?? [];
-
-      for (const m of messages) {
-        // интересуют только обычные сообщения
-        if (!(m instanceof Api.Message)) continue;
-
-        const peerId = (m as any).peerId;
-        if (peerId instanceof Api.PeerChannel) {
-          if (String(peerId.channelId) === String(channelId)) {
-            const id = Number((m as any).id);
-            const ok = Number.isFinite(id) && id > 0 ? id : null;
-            cache.set(threadRootId, ok);
-            return ok;
-          }
-        }
+    for (let step = 0; step < this.MAX_REPLY_CHAIN_STEPS; step += 1) {
+      if (!currentId || currentId <= 0) {
+        this.setCacheForVisited(cache, visited, null);
+        return null;
       }
 
-      cache.set(threadRootId, null);
-      return null;
-    } catch (e: any) {
-      // например: MESSAGE_ID_INVALID, если threadRootId не является дискуссионным корнем
-      cache.set(threadRootId, null);
-      return null;
+      const cached = cache.get(currentId);
+      if (cached !== undefined) {
+        this.setCacheForVisited(cache, visited, cached);
+        return cached;
+      }
+
+      visited.push(currentId);
+
+      let arr: any;
+      try {
+        arr = await client.getMessages(discussionPeer, { ids: [currentId] });
+      } catch {
+        this.setCacheForVisited(cache, visited, null);
+        return null;
+      }
+
+      const rootMsg = (arr?.[0] ?? null) as any;
+      if (!rootMsg || !(rootMsg instanceof Api.Message)) {
+        this.setCacheForVisited(cache, visited, null);
+        return null;
+      }
+
+      const fwd: any = rootMsg?.fwdFrom ?? null;
+      const fromId: any = fwd?.fromId ?? fwd?.from_id ?? null;
+      const channelPost = fwd?.channelPost ?? fwd?.channel_post ?? null;
+
+      if (debug) {
+        const peerId = rootMsg?.peerId;
+        const peer =
+          peerId instanceof Api.PeerChannel
+            ? `PeerChannel:${peerId.channelId}`
+            : peerId instanceof Api.PeerChat
+              ? `PeerChat:${peerId.chatId}`
+              : peerId instanceof Api.PeerUser
+                ? `PeerUser:${peerId.userId}`
+                : 'Peer:?';
+
+        const from =
+          fromId instanceof Api.PeerChannel
+            ? `PeerChannel:${fromId.channelId}`
+            : fromId instanceof Api.PeerChat
+              ? `PeerChat:${fromId.chatId}`
+              : fromId instanceof Api.PeerUser
+                ? `PeerUser:${fromId.userId}`
+                : fromId
+                  ? 'Peer:?'
+                  : 'null';
+
+        const parent = extractReplyToMsgId(rootMsg);
+
+        this.logger.debug(
+          `[core-users] resolve-step#${step}: msgId=${currentId} peer=${peer} fwdFrom.from=${from} fwdFrom.channelPost=${channelPost ?? 'null'} parentReplyTo=${parent ?? 'null'}`,
+        );
+      }
+
+      if (
+        typeof channelPost === 'number' &&
+        channelPost > 0 &&
+        fromId instanceof Api.PeerChannel &&
+        String(fromId.channelId) === String(channelId)
+      ) {
+        this.setCacheForVisited(cache, visited, channelPost);
+        return channelPost;
+      }
+
+      // идём выше по цепочке
+      const parentId = extractReplyToMsgId(rootMsg);
+      if (!parentId) {
+        this.setCacheForVisited(cache, visited, null);
+        return null;
+      }
+
+      currentId = parentId;
     }
+
+    // safety
+    this.setCacheForVisited(cache, visited, null);
+    return null;
   }
 
-  /**
-   * Коммит 6 — Core API валидация:
-   * - формат @username
-   * - getEntity(@username)
-   * - это именно канал (broadcast=true), а не группа
-   * - у канала есть username
-   * - у канала есть linked discussion group (linked_chat_id)
-   *
-   * Коммит 7:
-   * - возвращаем также inputPeer канала и inputPeer discussion group (чтобы не терять access_hash)
-   */
+  private setCacheForVisited(
+    cache: Map<number, number | null>,
+    visited: number[],
+    value: number | null,
+  ) {
+    for (const id of visited) cache.set(id, value);
+  }
+
   private async validateChannelAndDiscussionGroup(
     channelUsernameWithAt: string,
   ): Promise<ValidatedChannel> {
@@ -444,7 +549,6 @@ export class CoreChannelUsersService {
       );
     }
 
-    // минимальная защита от "пробелов/ссылок"
     if (raw.includes(' ') || raw.includes('/')) {
       throw new CoreChannelUsersValidationError(
         '⚠️ Некорректный формат. Отправьте именно @channel_name (без ссылок и пробелов).',
@@ -456,16 +560,13 @@ export class CoreChannelUsersService {
     let entity: any;
     try {
       entity = await client.getEntity(raw);
-    } catch (e: any) {
-      // частые ошибки: USERNAME_NOT_OCCUPIED / USERNAME_INVALID / CHANNEL_PRIVATE и т.п.
+    } catch {
       throw new CoreChannelUsersValidationError(
         `❌ Не удалось найти ${raw} или нет доступа.\n\n` +
           `Убедитесь, что это публичный канал с @username, и попробуйте снова.`,
       );
     }
 
-    // В GramJS и публичные каналы, и публичные группы часто бывают Api.Channel.
-    // Отличаем по флагу broadcast: true => канал, false => группа/megagroup.
     if (!(entity instanceof Api.Channel)) {
       throw new CoreChannelUsersValidationError(
         `⚠️ ${raw} — это не канал.\n\n` +
@@ -489,7 +590,6 @@ export class CoreChannelUsersService {
       );
     }
 
-    // Получаем full info, чтобы достать linked_chat_id (discussion group)
     let full: any;
     try {
       const input = await client.getInputEntity(entity);
@@ -521,7 +621,6 @@ export class CoreChannelUsersService {
       );
     }
 
-    // Коммит 7: из full.chats берём сам linked чат, чтобы у нас был access_hash
     const chats: any[] = (full as any)?.chats ?? [];
     const discussionChat = chats.find(
       (c) => String((c as any)?.id) === String(linkedChatId),
@@ -566,7 +665,7 @@ export class CoreChannelUsersService {
   > {
     const last = await this.runRepo.findOne({
       where: { userId: String(userId) },
-      order: { createdAt: 'DESC' }, // строго по ТЗ: max created_at
+      order: { createdAt: 'DESC' },
     });
 
     if (!last) return { type: 'ok' };
@@ -574,7 +673,6 @@ export class CoreChannelUsersService {
     const nowMs = Date.now();
     const lastCreatedMs = last.createdAt?.getTime?.() ?? 0;
 
-    // "already running" (fresh)
     if (
       last.status === CoreChannelUsersRunStatus.Running &&
       lastCreatedMs > 0 &&
@@ -589,7 +687,6 @@ export class CoreChannelUsersService {
 
     const nextAllowedAt = new Date(lastCreatedMs + this.USER_LIMIT_WINDOW_MS);
 
-    // строго по ТЗ: если now < next_allowed_at и last.status != failed → limited
     if (
       nowMs < nextAllowedAt.getTime() &&
       last.status !== CoreChannelUsersRunStatus.Failed
