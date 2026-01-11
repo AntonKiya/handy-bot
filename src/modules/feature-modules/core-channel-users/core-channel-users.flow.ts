@@ -113,60 +113,12 @@ export class CoreChannelUsersFlow {
       return;
     }
 
-    let chat: any;
-    try {
-      chat = await ctx.telegram.getChat(channelUsernameWithAt as any);
-    } catch (e: any) {
-      await this.restartWaitingForChannel(
-        ctx,
-        userId,
-        period,
-        `❌ Не удалось получить информацию о ${channelUsernameWithAt}.\n\n` +
-          `Убедитесь, что это реальный публичный канал с @username, и попробуйте снова.`,
-      );
-      return;
-    }
-
-    if (!chat || chat.type !== 'channel') {
-      await this.restartWaitingForChannel(
-        ctx,
-        userId,
-        period,
-        `⚠️ ${channelUsernameWithAt} — это не канал.\n\n` +
-          `Пожалуйста, отправьте @username именно публичного канала (chat.type === "channel").`,
-      );
-      return;
-    }
-
-    if (!chat.username) {
-      await this.restartWaitingForChannel(
-        ctx,
-        userId,
-        period,
-        `⚠️ Канал найден, но у него нет @username.\n\n` +
-          `В MVP поддерживаются только публичные каналы с @username. Попробуйте другой канал.`,
-      );
-      return;
-    }
-
-    const telegramChatIdNumber = Number(chat.id);
-    if (!Number.isFinite(telegramChatIdNumber)) {
-      await this.restartWaitingForChannel(
-        ctx,
-        userId,
-        period,
-        `❌ Не удалось определить telegram id канала ${channelUsernameWithAt}. Попробуйте другой канал.`,
-      );
-      return;
-    }
-
     // В MVP: состояние закрываем после ввода канала
     await this.userStateService.clear(userId);
 
     const runRes =
       await this.coreChannelUsersService.runImmediateCoreUsersReport({
         userId,
-        channelTelegramChatId: telegramChatIdNumber,
         channelUsernameWithAt,
         period: String(period),
         windowDays: periodDays,
@@ -178,7 +130,8 @@ export class CoreChannelUsersFlow {
     }
 
     if (runRes.type === 'error') {
-      await ctx.reply(runRes.message);
+      // Валидационные ошибки (и любые ошибки до успешного отчёта) — возвращаем в ожидание ввода
+      await this.restartWaitingForChannel(ctx, userId, period, runRes.message);
       return;
     }
 
@@ -187,7 +140,7 @@ export class CoreChannelUsersFlow {
 
     if (res.type === 'no-data' || !res.items.length) {
       await ctx.reply(
-        `Отчёт по ядру пользователей сообщества для @${chat.username} за ${periodLabel}.\n\n` +
+        `Отчёт по ядру пользователей сообщества для ${channelUsernameWithAt} за ${periodLabel}.\n\n` +
           `Нет данных за выбранный период.`,
       );
       return;
@@ -199,7 +152,7 @@ export class CoreChannelUsersFlow {
     });
 
     await ctx.reply(
-      `Отчёт по ядру пользователей сообщества для @${chat.username} за ${periodLabel}.\n\n` +
+      `Отчёт по ядру пользователей сообщества для ${channelUsernameWithAt} за ${periodLabel}.\n\n` +
         lines.join('\n'),
     );
   }

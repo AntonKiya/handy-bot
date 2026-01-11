@@ -35,11 +35,11 @@ export function buildCoreUsersPeriodKeyboard() {
 
 /**
  * Экран инструкции после выбора периода:
- * - только "Назад" (возврат к выбору периода)
+ * - "Назад" (возврат к выбору периода + clear state)
  */
 export function buildCoreUsersInputKeyboard() {
   return Markup.inlineKeyboard([
-    [Markup.button.callback('⬅ Назад', CORE_CHANNEL_USERS_CB.openMenu)],
+    [Markup.button.callback('⬅ Назад', CORE_CHANNEL_USERS_CB.back)],
   ]);
 }
 
