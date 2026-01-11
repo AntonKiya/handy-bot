@@ -7,6 +7,18 @@ import {
   CoreChannelUsersRunEntity,
   CoreChannelUsersRunStatus,
 } from './core-channel-users-run.entity';
+import {
+  DISCUSSION_BATCH_LIMIT,
+  MAX_DISCUSSION_MESSAGES_SCAN,
+  MS_PER_DAY,
+  TOP_USERS_AMOUNT,
+} from './core-channel-users.constants';
+import {
+  extractAuthorPeerId,
+  extractThreadRootId,
+  tgDateToDate,
+  extractSenderUsername,
+} from './core-channel-users.telegram.helpers';
 
 export interface CoreUserReportItem {
   telegramUserId: number;
@@ -38,6 +50,23 @@ class CoreChannelUsersValidationError extends Error {
   }
 }
 
+type ValidatedChannel = {
+  channelId: string;
+  channelUsernameWithAt: string; // canonical @username из Core
+  discussionGroupId: string;
+
+  // Коммит 7: чтобы не пытаться заново резолвить access_hash по linked_chat_id
+  channelInputPeer: any;
+  discussionInputPeer: any;
+};
+
+type AuthorAgg = {
+  telegramUserId: number;
+  username: string | null;
+  commentsCount: number;
+  postIds: Set<number>;
+};
+
 @Injectable()
 export class CoreChannelUsersService {
   private readonly logger = new Logger(CoreChannelUsersService.name);
@@ -61,6 +90,10 @@ export class CoreChannelUsersService {
    * Коммит 5:
    * - check-limit: 1 раз / 24 часа на user_id (по последнему run: max created_at)
    * - запись run: running -> success/failed
+   *
+   * Коммит 7:
+   * - реальный сбор комментариев из discussion group
+   * - фильтрация только комментариев, относящихся к тредам постов канала (messages.getDiscussionMessage + cache)
    */
   async runImmediateCoreUsersReport(params: {
     userId: number;
@@ -75,11 +108,7 @@ export class CoreChannelUsersService {
       return limitCheck;
     }
 
-    let validated: {
-      channelId: string;
-      channelUsernameWithAt: string; // canonical @username из Core
-      discussionGroupId: string;
-    };
+    let validated: ValidatedChannel;
 
     try {
       validated = await this.validateChannelAndDiscussionGroup(
@@ -126,10 +155,10 @@ export class CoreChannelUsersService {
     }
 
     try {
-      // Коммиты 7–8: здесь будет реальный сбор комментариев из discussion group и агрегация.
-      // Сейчас (Коммит 6) возвращаем безопасный "no-data" репорт, но run завершаем success,
-      // чтобы работали лимиты и статусная модель.
-      const report = this.buildEmptyReport(windowDays, true);
+      const report = await this.buildCoreUsersReportFromDiscussionGroup({
+        validated,
+        windowDays,
+      });
 
       await this.runRepo.update(savedRun.id, {
         status: CoreChannelUsersRunStatus.Success,
@@ -160,20 +189,253 @@ export class CoreChannelUsersService {
   }
 
   /**
+   * Коммит 7 — сбор из discussion group + фильтрация только тредов постов канала.
+   */
+  private async buildCoreUsersReportFromDiscussionGroup(params: {
+    validated: ValidatedChannel;
+    windowDays: number;
+  }): Promise<CoreChannelUsersReportResult> {
+    const { validated, windowDays } = params;
+
+    const now = new Date();
+    const windowTo = now;
+    const windowFrom = new Date(now.getTime() - windowDays * MS_PER_DAY);
+
+    const client = await this.telegramCoreService.getClient();
+
+    const threadToChannelPostIdCache = new Map<number, number | null>();
+    const authorCache = new Map<string, { username: string | null }>();
+    const agg = new Map<string, AuthorAgg>();
+
+    let scanned = 0;
+    let offsetId = 0;
+    let stopByWindow = false;
+
+    this.logger.debug(
+      `CoreChannelUsers: scanning discussion group messages. channel=${validated.channelUsernameWithAt}, discussionGroupId=${validated.discussionGroupId}, windowFrom=${windowFrom.toISOString()}`,
+    );
+
+    while (!stopByWindow) {
+      const messages = await client.getMessages(validated.discussionInputPeer, {
+        limit: DISCUSSION_BATCH_LIMIT,
+        offsetId,
+      });
+
+      if (!messages || messages.length === 0) {
+        break;
+      }
+
+      for (const m of messages) {
+        const msg = m as Api.Message;
+        if (!msg || typeof (msg as any).id !== 'number') continue;
+
+        scanned += 1;
+        if (scanned > MAX_DISCUSSION_MESSAGES_SCAN) {
+          // safety: не даём бесконечно скроллить
+          this.logger.warn(
+            `CoreChannelUsers: scan safety stop. scanned>${MAX_DISCUSSION_MESSAGES_SCAN}`,
+          );
+          stopByWindow = true;
+          break;
+        }
+
+        const commentedAt = tgDateToDate((msg as any).date);
+
+        // строго по ТЗ: останавливаемся, когда встречаем сообщения старше окна
+        if (commentedAt < windowFrom) {
+          stopByWindow = true;
+          break;
+        }
+
+        // 7.3: отбрасываем “левые” — если не в треде
+        const threadRootId = extractThreadRootId(msg);
+        if (!threadRootId) {
+          continue;
+        }
+
+        // 7.3: threadRootId -> channel post id через messages.getDiscussionMessage (кешируем)
+        const channelPostId = await this.resolveChannelPostIdForThreadRoot({
+          client,
+          channelId: validated.channelId,
+          discussionPeer: validated.discussionInputPeer,
+          threadRootId,
+          cache: threadToChannelPostIdCache,
+        });
+
+        if (!channelPostId) {
+          continue;
+        }
+
+        // автор
+        const authorPeer = extractAuthorPeerId(msg);
+        if (!authorPeer) continue;
+
+        const authorIdStr = authorPeer.id;
+        const authorIdNum = Number(authorIdStr);
+
+        // TODO: BIGINT — если когда-нибудь authorId > MAX_SAFE_INTEGER, будет проблема точности.
+        if (!Number.isFinite(authorIdNum) || authorIdNum <= 0) {
+          continue;
+        }
+
+        // username (кешируем по authorId)
+        let authorUsername: string | null = null;
+        const cachedAuthor = authorCache.get(authorIdStr);
+        if (cachedAuthor) {
+          authorUsername = cachedAuthor.username;
+        } else {
+          authorUsername = await this.tryResolveSenderUsername(msg);
+          authorCache.set(authorIdStr, { username: authorUsername });
+        }
+
+        // агрегация
+        const existing = agg.get(authorIdStr);
+        if (!existing) {
+          agg.set(authorIdStr, {
+            telegramUserId: authorIdNum,
+            username: authorUsername,
+            commentsCount: 1,
+            postIds: new Set<number>([channelPostId]),
+          });
+        } else {
+          existing.commentsCount += 1;
+
+          // если username ранее был null, а сейчас появился — обновим
+          if (!existing.username && authorUsername) {
+            existing.username = authorUsername;
+          }
+
+          existing.postIds.add(channelPostId);
+        }
+      }
+
+      const last = messages[messages.length - 1] as Api.Message;
+      if (!last || typeof (last as any).id !== 'number') break;
+
+      offsetId = (last as any).id;
+
+      if (messages.length < DISCUSSION_BATCH_LIMIT) {
+        break;
+      }
+    }
+
+    const items = Array.from(agg.values())
+      .map((x) => {
+        const postsCount = x.postIds.size;
+        const avg = postsCount > 0 ? x.commentsCount / postsCount : 0;
+
+        return {
+          telegramUserId: x.telegramUserId,
+          username: x.username,
+          commentsCount: x.commentsCount,
+          postsCount,
+          avgCommentsPerActivePost: avg,
+        } satisfies CoreUserReportItem;
+      })
+      .sort((a, b) => b.commentsCount - a.commentsCount)
+      .slice(0, TOP_USERS_AMOUNT);
+
+    if (!items.length) {
+      return {
+        type: 'no-data',
+        syncedWithTelegram: true,
+        items: [],
+        windowFrom,
+        windowTo,
+      };
+    }
+
+    return {
+      type: 'ok',
+      syncedWithTelegram: true,
+      items,
+      windowFrom,
+      windowTo,
+    };
+  }
+
+  private async tryResolveSenderUsername(
+    msg: Api.Message,
+  ): Promise<string | null> {
+    try {
+      // GramJS умеет резолвить sender; может быть Api.User / Api.Channel
+      const sender = await (msg as any).getSender?.();
+      return extractSenderUsername(sender);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Коммит 7 — threadRootId -> channel post id
+   * Используем messages.getDiscussionMessage и кешируем результаты.
+   *
+   * ВАЖНО:
+   * - peer для GetDiscussionMessage = discussion group (а не канал)
+   * - в ответе ищем сообщение, которое относится к каналу (peerId.channelId == channelId)
+   */
+  private async resolveChannelPostIdForThreadRoot(params: {
+    client: any;
+    channelId: string;
+    discussionPeer: any;
+    threadRootId: number;
+    cache: Map<number, number | null>;
+  }): Promise<number | null> {
+    const { client, channelId, discussionPeer, threadRootId, cache } = params;
+
+    const cached = cache.get(threadRootId);
+    if (cached !== undefined) {
+      return cached;
+    }
+
+    try {
+      const res = await client.invoke(
+        new Api.messages.GetDiscussionMessage({
+          peer: discussionPeer,
+          msgId: threadRootId,
+        }),
+      );
+
+      const messages: any[] = (res as any)?.messages ?? [];
+
+      for (const m of messages) {
+        // интересуют только обычные сообщения
+        if (!(m instanceof Api.Message)) continue;
+
+        const peerId = (m as any).peerId;
+        if (peerId instanceof Api.PeerChannel) {
+          if (String(peerId.channelId) === String(channelId)) {
+            const id = Number((m as any).id);
+            const ok = Number.isFinite(id) && id > 0 ? id : null;
+            cache.set(threadRootId, ok);
+            return ok;
+          }
+        }
+      }
+
+      cache.set(threadRootId, null);
+      return null;
+    } catch (e: any) {
+      // например: MESSAGE_ID_INVALID, если threadRootId не является дискуссионным корнем
+      cache.set(threadRootId, null);
+      return null;
+    }
+  }
+
+  /**
    * Коммит 6 — Core API валидация:
    * - формат @username
    * - getEntity(@username)
    * - это именно канал (broadcast=true), а не группа
    * - у канала есть username
    * - у канала есть linked discussion group (linked_chat_id)
+   *
+   * Коммит 7:
+   * - возвращаем также inputPeer канала и inputPeer discussion group (чтобы не терять access_hash)
    */
   private async validateChannelAndDiscussionGroup(
     channelUsernameWithAt: string,
-  ): Promise<{
-    channelId: string;
-    channelUsernameWithAt: string;
-    discussionGroupId: string;
-  }> {
+  ): Promise<ValidatedChannel> {
     const raw = (channelUsernameWithAt ?? '').trim();
 
     if (!raw || !raw.startsWith('@') || raw.length < 2) {
@@ -259,29 +521,37 @@ export class CoreChannelUsersService {
       );
     }
 
+    // Коммит 7: из full.chats берём сам linked чат, чтобы у нас был access_hash
+    const chats: any[] = (full as any)?.chats ?? [];
+    const discussionChat = chats.find(
+      (c) => String((c as any)?.id) === String(linkedChatId),
+    );
+
+    if (!discussionChat) {
+      throw new CoreChannelUsersValidationError(
+        `❌ Не удалось получить данные дискуссионной группы для ${raw}. Попробуйте позже.`,
+      );
+    }
+
+    let channelInputPeer: any;
+    let discussionInputPeer: any;
+
+    try {
+      channelInputPeer = await client.getInputEntity(entity);
+      discussionInputPeer = await client.getInputEntity(discussionChat);
+    } catch (e: any) {
+      this.logger.error(`getInputEntity failed for ${raw}`, e);
+      throw new CoreChannelUsersValidationError(
+        `❌ Не удалось подготовить данные для чтения комментариев ${raw}. Попробуйте позже.`,
+      );
+    }
+
     return {
       channelId: String(channelIdRaw),
       channelUsernameWithAt: `@${username}`,
       discussionGroupId: String(linkedChatId),
-    };
-  }
-
-  private buildEmptyReport(
-    windowDays: number,
-    syncedWithTelegram: boolean,
-  ): CoreChannelUsersReportResult {
-    const now = new Date();
-    const windowTo = now;
-    const windowFrom = new Date(
-      now.getTime() - windowDays * 24 * 60 * 60 * 1000,
-    );
-
-    return {
-      type: 'no-data',
-      syncedWithTelegram,
-      items: [],
-      windowFrom,
-      windowTo,
+      channelInputPeer,
+      discussionInputPeer,
     };
   }
 
