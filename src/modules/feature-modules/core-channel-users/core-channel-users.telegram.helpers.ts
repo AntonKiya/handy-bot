@@ -45,14 +45,10 @@ export function extractThreadRootId(msg: Api.Message): number | null {
     r?.msg ??
     null;
 
-  const id =
-    typeof top === 'number' && top > 0
-      ? top
-      : typeof direct === 'number' && direct > 0
-        ? direct
-        : null;
+  if (typeof top === 'number' && top > 0) return top;
+  if (typeof direct === 'number' && direct > 0) return direct;
 
-  return id;
+  return null;
 }
 
 export function extractReplyToMsgId(msg: Api.Message): number | null {

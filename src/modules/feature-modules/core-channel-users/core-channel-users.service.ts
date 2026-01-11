@@ -73,12 +73,7 @@ export class CoreChannelUsersService {
   private readonly USER_LIMIT_WINDOW_MS = 24 * 60 * 60 * 1000;
   private readonly RUNNING_FRESH_MS = 20 * 60 * 1000;
 
-  // чтобы не утонуть в логах
-  private readonly DEBUG_SAMPLE_MESSAGES = 25;
-  private readonly DEBUG_SAMPLE_RESOLVES = 25;
-
-  // важно для nested replies, когда topId отсутствует:
-  // идём вверх по reply-цепочке и ищем автофорвард из канала
+  // safety: чтобы не уйти в бесконечную цепочку replyToMsgId
   private readonly MAX_REPLY_CHAIN_STEPS = 25;
 
   constructor(
@@ -121,8 +116,7 @@ export class CoreChannelUsersService {
     }
 
     this.logger.debug(
-      `[core-users] validated: channel=${validated.channelUsernameWithAt} channelId=${validated.channelId} discussionGroupId=${validated.discussionGroupId} ` +
-        `channelPeer=${validated.channelInputPeer?.className ?? 'unknown'} discussionPeer=${validated.discussionInputPeer?.className ?? 'unknown'}`,
+      `[core-users] validated: channel=${validated.channelUsernameWithAt} channelId=${validated.channelId} discussionGroupId=${validated.discussionGroupId}`,
     );
 
     const now = new Date();
@@ -182,6 +176,12 @@ export class CoreChannelUsersService {
     }
   }
 
+  /**
+   * Коммит 7 — сбор из discussion group.
+   * Фильтрация:
+   * - учитываем только сообщения, которые являются reply (replyToTopId/replyToMsgId)
+   * - маппим их к посту канала через подъём к корню треда и проверку fwdFrom.fromId + fwdFrom.channelPost
+   */
   private async buildCoreUsersReportFromDiscussionGroup(params: {
     validated: ValidatedChannel;
     windowDays: number;
@@ -194,22 +194,6 @@ export class CoreChannelUsersService {
 
     const client = await this.telegramCoreService.getClient();
 
-    // sanity — чтобы понимать, что канал читается
-    try {
-      const ch = await client.getMessages(validated.channelInputPeer, {
-        limit: 1,
-      });
-      const m0 = ch?.[0] as any;
-      this.logger.debug(
-        `[core-users] sanity channel last: ok=${Boolean(m0)} id=${m0?.id ?? 'n/a'} date=${m0?.date ? tgDateToDate(m0.date).toISOString() : 'n/a'}`,
-      );
-    } catch (e: any) {
-      this.logger.warn(
-        `[core-users] sanity channel last: FAILED (${this.safeErrorText(e)})`,
-      );
-    }
-
-    // cache: messageId_in_discussion -> channelPostId (или null если не относится к посту канала)
     const msgIdToChannelPostIdCache = new Map<number, number | null>();
     const authorCache = new Map<string, { username: string | null }>();
     const agg = new Map<string, AuthorAgg>();
@@ -218,12 +202,9 @@ export class CoreChannelUsersService {
     let offsetId = 0;
     let stopByWindow = false;
 
-    let debugMsgPrinted = 0;
-    let debugResolvePrinted = 0;
-
     this.logger.debug(
       `[core-users] scan start: channel=${validated.channelUsernameWithAt} discussionGroupId=${validated.discussionGroupId} ` +
-        `windowFrom=${windowFrom.toISOString()} windowTo=${windowTo.toISOString()} batchLimit=${DISCUSSION_BATCH_LIMIT} maxScan=${MAX_DISCUSSION_MESSAGES_SCAN}`,
+        `windowFrom=${windowFrom.toISOString()} windowTo=${windowTo.toISOString()} limit=${DISCUSSION_BATCH_LIMIT}`,
     );
 
     while (!stopByWindow) {
@@ -234,20 +215,10 @@ export class CoreChannelUsersService {
 
       if (!messages || messages.length === 0) break;
 
-      const first = messages[0] as any;
-      const last = messages[messages.length - 1] as any;
-
-      this.logger.debug(
-        `[core-users] batch: offsetId=${offsetId} got=${messages.length} ` +
-          `firstId=${first?.id ?? 'n/a'} firstDate=${first?.date ? tgDateToDate(first.date).toISOString() : 'n/a'} ` +
-          `lastId=${last?.id ?? 'n/a'} lastDate=${last?.date ? tgDateToDate(last.date).toISOString() : 'n/a'}`,
-      );
-
       for (const m of messages) {
         const msg = m as Api.Message;
         const msgId = Number((msg as any)?.id);
-
-        if (!msg || !Number.isFinite(msgId) || msgId <= 0) continue;
+        if (!Number.isFinite(msgId) || msgId <= 0) continue;
 
         scanned += 1;
         if (scanned > MAX_DISCUSSION_MESSAGES_SCAN) {
@@ -260,7 +231,7 @@ export class CoreChannelUsersService {
 
         const commentedAt = tgDateToDate((msg as any).date);
 
-        // строго по ТЗ: останавливаемся на первом сообщении старше окна
+        // строго по ТЗ: стоп на первом сообщении старше окна
         if (commentedAt < windowFrom) {
           this.logger.debug(
             `[core-users] stopByWindow: msg#${msgId} date=${commentedAt.toISOString()} < windowFrom=${windowFrom.toISOString()}`,
@@ -269,66 +240,21 @@ export class CoreChannelUsersService {
           break;
         }
 
-        // candidateId = replyToTopId ?? replyToMsgId
-        const threadRootId = extractThreadRootId(msg);
-        if (!threadRootId) {
-          if (debugMsgPrinted < this.DEBUG_SAMPLE_MESSAGES) {
-            const r: any = (msg as any)?.replyTo ?? null;
-            const top =
-              r?.replyToTopId ?? r?.topMsgId ?? r?.top ?? r?.reply_to_top_id;
-            const direct =
-              r?.replyToMsgId ?? r?.reply_to_msg_id ?? r?.msgId ?? r?.msg;
-            this.logger.debug(
-              `[core-users] msg#${msgId} date=${commentedAt.toISOString()} skip(no-reply) replyTo=${r ? `top=${top ?? 'null'}, msg=${direct ?? 'null'}` : 'null'}`,
-            );
-            debugMsgPrinted += 1;
-          }
-          continue;
-        }
+        // “левые” — не reply => не комментарий к посту
+        const threadCandidateId = extractThreadRootId(msg);
+        if (!threadCandidateId) continue;
 
         const authorPeer = extractAuthorPeerId(msg);
-        if (!authorPeer) continue;
+        if (!authorPeer || authorPeer.type !== 'user') continue;
 
-        // отчёт по пользователям — считаем только user
-        if (authorPeer.type !== 'user') {
-          if (debugMsgPrinted < this.DEBUG_SAMPLE_MESSAGES) {
-            this.logger.debug(
-              `[core-users] msg#${msgId} date=${commentedAt.toISOString()} skip(author-not-user) author=${authorPeer.type}:${authorPeer.id} threadCandidate=${threadRootId}`,
-            );
-            debugMsgPrinted += 1;
-          }
-          continue;
-        }
-
-        if (debugMsgPrinted < this.DEBUG_SAMPLE_MESSAGES) {
-          const r: any = (msg as any)?.replyTo ?? null;
-          const top =
-            r?.replyToTopId ?? r?.topMsgId ?? r?.top ?? r?.reply_to_top_id;
-          const direct =
-            r?.replyToMsgId ?? r?.reply_to_msg_id ?? r?.msgId ?? r?.msg;
-          this.logger.debug(
-            `[core-users] msg#${msgId} date=${commentedAt.toISOString()} author=user:${authorPeer.id} threadCandidate=${threadRootId} replyTo=top=${top ?? 'null'} msg=${direct ?? 'null'}`,
-          );
-          debugMsgPrinted += 1;
-        }
-
-        // КЛЮЧЕВО: резолвим channelPostId даже если top отсутствует
-        // поднимаясь по reply-цепочке до автофорварда из канала
+        // маппим к посту канала
         const channelPostId = await this.resolveChannelPostIdByReplyChain({
           client,
           channelId: validated.channelId,
           discussionPeer: validated.discussionInputPeer,
-          startMsgId: threadRootId,
+          startMsgId: threadCandidateId,
           cache: msgIdToChannelPostIdCache,
-          debug: debugResolvePrinted < this.DEBUG_SAMPLE_RESOLVES,
         });
-
-        if (debugResolvePrinted < this.DEBUG_SAMPLE_RESOLVES) {
-          this.logger.debug(
-            `[core-users] map: start=${threadRootId} -> channelPostId=${channelPostId}`,
-          );
-          debugResolvePrinted += 1;
-        }
 
         if (!channelPostId) continue;
 
@@ -336,7 +262,7 @@ export class CoreChannelUsersService {
         const authorIdNum = Number(authorIdStr);
         if (!Number.isFinite(authorIdNum) || authorIdNum <= 0) continue;
 
-        // username cache
+        // username cache (best effort)
         let authorUsername: string | null = null;
         const cachedAuthor = authorCache.get(authorIdStr);
         if (cachedAuthor) {
@@ -421,11 +347,11 @@ export class CoreChannelUsersService {
   }
 
   /**
-   * Ищем channelPostId по reply-цепочке:
-   * startMsgId -> (fetch msg) -> если автофорвард из нужного канала => берём fwdFrom.channelPost
-   * иначе -> идём выше по replyToMsgId, пока не найдём root или не упремся.
+   * Поднимаемся по reply-цепочке, пока не найдём корневое сообщение треда,
+   * которое является автофорвардом из канала (fwdFrom.fromId == channelId),
+   * и берём fwdFrom.channelPost как ID поста канала.
    *
-   * Это закрывает кейс "ответы на ответы", когда replyToTopId отсутствует (как у тебя в логах).
+   * Это соответствует твоему рабочему скрипту и чинит кейс, когда replyToTopId отсутствует.
    */
   private async resolveChannelPostIdByReplyChain(params: {
     client: any;
@@ -433,10 +359,8 @@ export class CoreChannelUsersService {
     discussionPeer: any;
     startMsgId: number;
     cache: Map<number, number | null>;
-    debug: boolean;
   }): Promise<number | null> {
-    const { client, channelId, discussionPeer, startMsgId, cache, debug } =
-      params;
+    const { client, channelId, discussionPeer, startMsgId, cache } = params;
 
     const cached0 = cache.get(startMsgId);
     if (cached0 !== undefined) return cached0;
@@ -476,35 +400,6 @@ export class CoreChannelUsersService {
       const fromId: any = fwd?.fromId ?? fwd?.from_id ?? null;
       const channelPost = fwd?.channelPost ?? fwd?.channel_post ?? null;
 
-      if (debug) {
-        const peerId = rootMsg?.peerId;
-        const peer =
-          peerId instanceof Api.PeerChannel
-            ? `PeerChannel:${peerId.channelId}`
-            : peerId instanceof Api.PeerChat
-              ? `PeerChat:${peerId.chatId}`
-              : peerId instanceof Api.PeerUser
-                ? `PeerUser:${peerId.userId}`
-                : 'Peer:?';
-
-        const from =
-          fromId instanceof Api.PeerChannel
-            ? `PeerChannel:${fromId.channelId}`
-            : fromId instanceof Api.PeerChat
-              ? `PeerChat:${fromId.chatId}`
-              : fromId instanceof Api.PeerUser
-                ? `PeerUser:${fromId.userId}`
-                : fromId
-                  ? 'Peer:?'
-                  : 'null';
-
-        const parent = extractReplyToMsgId(rootMsg);
-
-        this.logger.debug(
-          `[core-users] resolve-step#${step}: msgId=${currentId} peer=${peer} fwdFrom.from=${from} fwdFrom.channelPost=${channelPost ?? 'null'} parentReplyTo=${parent ?? 'null'}`,
-        );
-      }
-
       if (
         typeof channelPost === 'number' &&
         channelPost > 0 &&
@@ -525,7 +420,6 @@ export class CoreChannelUsersService {
       currentId = parentId;
     }
 
-    // safety
     this.setCacheForVisited(cache, visited, null);
     return null;
   }
