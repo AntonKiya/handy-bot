@@ -10,11 +10,10 @@ import { MenuModule } from './modules/core-modules/menu/menu.module';
 import { UserModule } from './modules/core-modules/user/user.module';
 import { ChannelModule } from './modules/core-modules/channel/channel.module';
 import { UserChannelsModule } from './modules/core-modules/user-channels/user-channels.module';
-import { ChannelPostsModule } from './modules/core-modules/channel-posts/channel-posts.module';
 import { CoreChannelUsersModule } from './modules/feature-modules/core-channel-users/core-channel-users.module';
 import { TelegramCoreModule } from './telegram-core/telegram-core.module';
 import { HealthcheckModule } from './healthcheck/healthcheck.module';
-import { ScheduleModule } from "@nestjs/schedule";
+import { ScheduleModule } from '@nestjs/schedule';
 
 @Module({
   imports: [
@@ -60,7 +59,6 @@ import { ScheduleModule } from "@nestjs/schedule";
     UserModule,
     ChannelModule,
     UserChannelsModule,
-    ChannelPostsModule,
     CoreChannelUsersModule,
     HealthcheckModule,
     ScheduleModule.forRoot(),
