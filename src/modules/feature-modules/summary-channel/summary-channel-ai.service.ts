@@ -1,137 +1,225 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { QwenClient } from '../../../ai/qwen.clinet';
+import { OpenAI } from 'openai';
+import ResponseFormatJSONSchema = OpenAI.ResponseFormatJSONSchema;
 
 export type SummaryInputMap = Record<string, string>;
 export type SummaryOutputMap = Record<string, string>;
+
+export type AiSummaryItem = {
+  id: string;
+  status: 'ok' | 'skipped' | 'error';
+  summary: string;
+  reason?: string;
+};
 
 @Injectable()
 export class SummaryChannelAiService {
   private readonly logger = new Logger(SummaryChannelAiService.name);
 
+  private readonly MAX_RETRIES = 2;
+
   constructor(private readonly qwenClient: QwenClient) {}
 
-  /**
-   * Принимает объект вида { [id]: fullText }, возвращает { [id]: summaryText }.
-   */
-  async summarizePosts(posts: SummaryInputMap): Promise<SummaryOutputMap> {
+  async summarizePosts(posts: SummaryInputMap): Promise<AiSummaryItem[]> {
     const ids = Object.keys(posts);
-
-    if (!ids.length) {
-      this.logger.debug('summarizePosts called with empty posts map');
-      return {};
-    }
+    if (!ids.length) return [];
 
     const prompt = this.buildPrompt(posts);
-    this.logger.debug(
-      `Sending ${ids.length} posts to Qwen for summarization...`,
+
+    const responseFormat: ResponseFormatJSONSchema = {
+      type: 'json_schema',
+      json_schema: {
+        name: 'summary_posts_v1',
+        strict: true,
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['items'],
+          properties: {
+            items: {
+              type: 'array',
+              items: {
+                type: 'object',
+                additionalProperties: false,
+                required: ['id', 'status', 'summary'],
+                properties: {
+                  id: { type: 'string' },
+                  status: {
+                    type: 'string',
+                    enum: ['ok', 'skipped', 'error'],
+                  },
+                  summary: { type: 'string' },
+                  reason: { type: 'string' },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    let lastError: Error | null = null;
+
+    for (let attempt = 1; attempt <= this.MAX_RETRIES; attempt++) {
+      try {
+        const raw = await this.qwenClient.generateText(prompt, responseFormat);
+
+        this.logger.debug(
+          `LLM raw response (attempt ${attempt}): ${String(raw).slice(0, 500)}`,
+        );
+
+        const items = this.parseResponse(raw);
+
+        if (items !== null) {
+          return items;
+        }
+
+        this.logger.warn(
+          `LLM response parsing failed (attempt ${attempt}/${this.MAX_RETRIES}). Raw: ${String(raw).slice(0, 300)}`,
+        );
+      } catch (e: any) {
+        lastError = e;
+        this.logger.error(
+          `LLM call failed (attempt ${attempt}/${this.MAX_RETRIES}): ${e.message}`,
+        );
+      }
+
+      // Небольшая задержка перед retry
+      if (attempt < this.MAX_RETRIES) {
+        await this.sleep(500 * attempt);
+      }
+    }
+
+    this.logger.error(
+      `All ${this.MAX_RETRIES} LLM attempts failed for ${ids.length} posts`,
+      lastError,
     );
 
-    const raw = await this.qwenClient.generateText(prompt);
-
-    const parsed = this.parseResponse(raw, ids);
-    this.logger.debug(
-      `Got summaries for ${Object.keys(parsed).length} of ${ids.length} posts`,
-    );
-
-    return parsed;
+    return [];
   }
 
-  /**
-   * Собираем твой "жёсткий" промпт + список постов в формате:
-   *
-   *  <id>:<text>
-   */
+  private parseResponse(raw: string): AiSummaryItem[] | null {
+    // Проверяем, что raw — строка
+    if (typeof raw !== 'string') {
+      this.logger.warn(`LLM returned non-string: ${typeof raw}`);
+      return null;
+    }
+
+    const trimmed = raw.trim();
+
+    // Проверяем, что это похоже на JSON
+    if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) {
+      this.logger.warn(
+        `LLM response is not JSON-like: ${trimmed.slice(0, 100)}`,
+      );
+      return null;
+    }
+
+    let parsed: any;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch (e) {
+      this.logger.warn(`JSON parse error: ${(e as Error).message}`);
+      return null;
+    }
+
+    // Поддержка обоих ключей: items (правильный) и posts (fallback)
+    const items = parsed?.items ?? parsed?.posts;
+
+    if (!Array.isArray(items)) {
+      this.logger.warn(`Parsed response has no items[] or posts[] array`);
+      return null;
+    }
+
+    // Валидация каждого item
+    const validated: AiSummaryItem[] = [];
+
+    for (const item of items) {
+      if (!item || typeof item !== 'object') continue;
+
+      const id = String(item.id ?? '').trim();
+      if (!id) continue;
+
+      const status = this.validateStatus(item.status);
+      const summary = status === 'ok' ? String(item.summary ?? '').trim() : '';
+      const reason = item.reason ? String(item.reason).trim() : undefined;
+
+      validated.push({ id, status, summary, reason });
+    }
+
+    if (validated.length === 0 && items.length > 0) {
+      this.logger.warn(`All ${items.length} items failed validation`);
+      return null;
+    }
+
+    return validated;
+  }
+
+  private validateStatus(status: unknown): 'ok' | 'skipped' | 'error' {
+    if (status === 'skipped') return 'skipped';
+    if (status === 'error') return 'error';
+    return 'ok';
+  }
+
   private buildPrompt(posts: SummaryInputMap): string {
-    const header = `
-      Суммируй содержание каждого поста из списка ниже точно в одном предложении, передавая только основную тему и суть поста.
+    const instructions = `
+      Ты — система суммаризации постов.
       
-      Требования:
-      Не добавляй ничего от себя.
-      Не делай выводов или интерпретаций.
-      Не используй оценок.
-      Не используй вводных фраз вроде “пост о”, “автор пишет”, “в тексте говорится”.
-      Не подогревай интерес, не усиливай и не смягчай тон.
-      Сохраняй исходный стиль нейтральным, сухим и информативным.
-      Суммируй каждый пост отдельно, в порядке появления.
-      Идентификаторы постов должны быть возвращены без изменений.
-      Язык суммированного результата не должен отличаться от языка в оригинальном тексте.
+      Задача:
+      Для каждого поста верни краткое суммарное описание РОВНО В ОДНОМ предложении, передавая только основную тему и суть.
       
-      Формат ответа (строго):
-      <id1>:<одно предложение>@#&<id2>:<одно предложение>@#&<id3>:<одно предложение>@#&...
+      Правила (строго):
+      - Не добавляй ничего от себя.
+      - Не делай выводов или интерпретаций.
+      - Не используй оценок и эмоциональных формулировок.
+      - Не используй вводные фразы вроде «пост о», «автор пишет», «в тексте говорится».
+      - Не подогревай интерес, не усиливай и не смягчай тон.
+      - Стиль: нейтральный, сухой, информативный.
+      - Язык summary должен совпадать с языком исходного текста конкретного поста.
+      - Суммируй каждый пост отдельно, в порядке появления.
+      - id возвращай без изменений.
+      
+      Обработка ошибок (status):
+      - ok: ИСПОЛЬЗУЙ ПОЧТИ ВСЕГДА. Если есть хоть какой-то осмысленный текст — делай summary.
+      - skipped: ТОЛЬКО если текст буквально пустой или содержит менее 3 слов.
+      - error: ТОЛЬКО если текст полностью нечитаем (случайные символы, битая кодировка).
+      
+      ВАЖНО — что НЕ является причиной для skipped/error:
+      - Пост содержит ссылку — ЭТО НЕ ПРИЧИНА, суммаризируй текст вокруг ссылки.
+      - Пост — анонс или дайджест нескольких тем — суммаризируй как "Дайджест/анонс включает X, Y, Z".
+      - Пост короткий но осмысленный — суммаризируй как есть.
+      - Пост рекламный — суммаризируй суть предложения.
       
       Важно:
-      Никаких переносов строк.
-      Никаких пояснений.
-      Никакого дополнительного текста до или после.
-      Разделитель должен быть строго @#& без пробелов вокруг.
-      В обобщении должно быть ровно одно предложение.
+      - Summary должно быть ровно одно предложение (одно законченное предложение).
+      - Если status = ok, reason не заполняй.
+      - Если status = skipped или error, заполни reason (коротко), а summary оставь пустым.
+      - ЯЗЫК: summary и reason СТРОГО на том же языке, что и исходный пост. НИКОГДА не переключайся на другой язык.
       
-      Пример (для понимания):
-      Оригинал:
-      1: После «Аэрофлота» о возобновлении рейсов в Геленджик сообщила S7 Airlines. С 7 августа 2025 года — из Новосибирска, а с 8 августа — из Москвы. Закрытый с 2022 года аэропорт возобновил работу в июле
-      Ответ:
-      1:S7 Airlines анонсировала возобновление рейсов в Геленджик с августа 2025 года.@#&
+      КРИТИЧЕСКИ ВАЖНО:
+      - Обрабатывай посты СТРОГО В ТОМ ЖЕ ПОРЯДКЕ, в каком они даны.
+      - Каждый id в ответе ДОЛЖЕН ТОЧНО соответствовать id из входных данных.
+      - НЕ путай содержимое разных постов между собой.
       
-      Посты:
+      ВЫХОДНОЙ ФОРМАТ:
+      Верни ТОЛЬКО валидный JSON с единственным ключом "items" — массив объектов.
+      НЕ используй ключ "posts". Используй ТОЛЬКО ключ "items".
+      Пример:
+      {"items":[{"id":"123","status":"ok","summary":"Текст саммари."}]}
     `.trim();
 
-    const lines: string[] = [];
+    const input = {
+      posts: Object.entries(posts).map(([id, text]) => ({
+        id: String(id),
+        text: (text ?? '').replace(/\s+/g, ' ').trim(),
+      })),
+    };
 
-    for (const [id, text] of Object.entries(posts)) {
-      const normalizedText = text.replace(/\s+/g, ' ').trim();
-      lines.push(`${id}:${normalizedText}`);
-    }
-
-    return `${header}\n${lines.join('\n')}`;
+    return `${instructions}\n\nВходные данные (JSON):\n${JSON.stringify(input)}`;
   }
 
-  /**
-   * Разбираем строку вида:
-   * "id1:summary1@#&id2:summary2@#&..."
-   */
-  private parseResponse(raw: string, expectedIds: string[]): SummaryOutputMap {
-    const summaries: SummaryOutputMap = {};
-    const expectedSet = new Set(expectedIds);
-
-    if (!raw) {
-      this.logger.warn('Empty response from model for summarizePosts');
-      return summaries;
-    }
-
-    const parts = raw
-      .split('@#&')
-      .map((p) => p.trim())
-      .filter(Boolean);
-
-    for (const part of parts) {
-      const colonIndex = part.indexOf(':');
-      if (colonIndex === -1) {
-        this.logger.warn(`Segment without colon in AI response: "${part}"`);
-        continue;
-      }
-
-      const id = part.slice(0, colonIndex).trim();
-      const summary = part.slice(colonIndex + 1).trim();
-
-      if (!id || !summary) {
-        this.logger.warn(`Empty id or summary in segment: "${part}"`);
-        continue;
-      }
-
-      if (!expectedSet.has(id)) {
-        this.logger.warn(`Unexpected id "${id}" in AI response`);
-        continue;
-      }
-
-      summaries[id] = summary;
-    }
-
-    for (const id of expectedIds) {
-      if (!summaries[id]) {
-        this.logger.warn(`No summary produced for id=${id}`);
-      }
-    }
-
-    return summaries;
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 }

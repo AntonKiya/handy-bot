@@ -34,6 +34,19 @@ export class SummaryChannelResultEntity {
   @Column({ name: 'summary_text', type: 'text' })
   summaryText!: string;
 
+  /** ok | skipped | error */
+  @Column({
+    name: 'status',
+    type: 'enum',
+    enum: ['ok', 'skipped', 'error'],
+    default: 'ok',
+  })
+  status!: 'ok' | 'skipped' | 'error';
+
+  /** reason only for skipped / error */
+  @Column({ name: 'reason', type: 'text', nullable: true })
+  reason!: string | null;
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt!: Date;
 }
