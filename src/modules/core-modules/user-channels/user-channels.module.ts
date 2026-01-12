@@ -4,7 +4,6 @@ import { UserChannel } from './user-channel.entity';
 import { User } from '../user/user.entity';
 import { Channel } from '../channel/channel.entity';
 import { UserChannelsService } from './user-channels.service';
-import { UserChannelsFlowService } from './user-channels-flow.service';
 import { MenuModule } from '../menu/menu.module';
 import { ChannelModule } from '../channel/channel.module';
 
@@ -14,7 +13,7 @@ import { ChannelModule } from '../channel/channel.module';
     MenuModule,
     ChannelModule,
   ],
-  providers: [UserChannelsService, UserChannelsFlowService],
-  exports: [UserChannelsService, UserChannelsFlowService],
+  providers: [UserChannelsService],
+  exports: [UserChannelsService],
 })
 export class UserChannelsModule {}
