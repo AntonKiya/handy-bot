@@ -461,6 +461,9 @@ export class SummaryChannelFlow {
           disable_web_page_preview: true,
         } as any);
       }
+
+      const nextSummaryStr = this.formatDateTime(res.nextSummaryAt);
+      await ctx.reply(`Следующее саммари пришлю: ${nextSummaryStr}.`);
       return;
     }
 
@@ -475,5 +478,14 @@ export class SummaryChannelFlow {
     }
 
     await ctx.reply(res.message);
+  }
+
+  private formatDateTime(date: Date): string {
+    const day = String(date.getDate()).padStart(2, '0');
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const year = date.getFullYear();
+    const hours = String(date.getHours()).padStart(2, '0');
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    return `${day}.${month}.${year} ${hours}:${minutes}`;
   }
 }

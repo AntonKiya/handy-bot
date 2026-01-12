@@ -47,6 +47,9 @@ export class SummaryChannelResultEntity {
   @Column({ name: 'reason', type: 'text', nullable: true })
   reason!: string | null;
 
+  @Column({ name: 'post_url', type: 'text', nullable: true })
+  postUrl!: string | null;
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt!: Date;
 }
