@@ -1,5 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import OpenAI from 'openai';
+import ResponseFormatText = OpenAI.ResponseFormatText;
+import ResponseFormatJSONSchema = OpenAI.ResponseFormatJSONSchema;
+import ResponseFormatJSONObject = OpenAI.ResponseFormatJSONObject;
 
 @Injectable()
 export class QwenClient {
@@ -27,7 +30,13 @@ export class QwenClient {
    * Низкоуровневый метод: даём текст — получаем текст.
    * Тут `prompt` превращаем в messages (system+user), чтобы было ближе к chat-модели.
    */
-  async generateText(prompt: string): Promise<string> {
+  async generateText(
+    prompt: string,
+    responseFormat?:
+      | ResponseFormatText
+      | ResponseFormatJSONSchema
+      | ResponseFormatJSONObject,
+  ): Promise<string> {
     if (!this.client) {
       throw new Error('QwenClient is not initialized (no QWEN_API_KEY).');
     }
@@ -37,6 +46,7 @@ export class QwenClient {
         model: 'qwen2.5-7b-instruct',
         stream: false,
         temperature: 0,
+        response_format: responseFormat,
         messages: [
           {
             role: 'system',
