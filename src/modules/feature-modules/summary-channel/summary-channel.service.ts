@@ -28,7 +28,7 @@ export interface ParsedChannelPost {
 type ImmediateRunResult =
   | { type: 'limited'; message: string }
   | { type: 'empty'; message: string }
-  | { type: 'success'; messages: string[] }
+  | { type: 'success'; messages: string[]; nextSummaryAt: Date }
   | { type: 'error'; message: string };
 
 type PlannedTarget = {
@@ -144,12 +144,16 @@ export class SummaryChannelService {
 
         return {
           type: 'empty',
-          message: `There are no suitable text posts in the ${channelUsernameWithAt} channel for the recent period.`,
+          message: `Нет постов для саммари в канале '${channelUsernameWithAt}'.`,
         };
       }
 
       const { summaries, resultsToStore } =
-        await this.summarizeAndPrepareResults(posts, savedRun.id);
+        await this.summarizeAndPrepareResults(
+          posts,
+          savedRun.id,
+          channelUsername,
+        );
 
       if (resultsToStore.length) {
         await this.summaryChannelResultRepository.insert(resultsToStore);
@@ -166,9 +170,14 @@ export class SummaryChannelService {
         summaries,
       });
 
+      const nextSummaryAt = new Date(
+        Date.now() + this.HOURS_WINDOW * 60 * 60 * 1000,
+      );
+
       return {
         type: 'success',
         messages: this.splitTelegramMessage(digestText),
+        nextSummaryAt,
       };
     } catch (e: any) {
       this.logger.error(
@@ -251,7 +260,7 @@ export class SummaryChannelService {
       }
 
       const { summaries, resultsToStore } =
-        await this.summarizeAndPrepareResults(posts, savedRun.id);
+        await this.summarizeAndPrepareResults(posts, savedRun.id, usernameNoAt);
 
       if (resultsToStore.length) {
         await this.summaryChannelResultRepository.insert(resultsToStore);
@@ -378,7 +387,7 @@ export class SummaryChannelService {
         isImmediateRun: true,
         status: SummaryChannelRunStatus.Running,
       },
-      order: { startedAt: 'DESC' },
+      order: { createdAt: 'DESC' },
     });
 
     if (running) {
@@ -395,24 +404,27 @@ export class SummaryChannelService {
         isImmediateRun: true,
         status: SummaryChannelRunStatus.Success,
       },
-      order: { startedAt: 'DESC' },
+      order: { createdAt: 'DESC' },
     });
 
     if (!lastSuccess) return { type: 'ok' };
 
     const WINDOW_MS = 24 * 60 * 60 * 1000;
     const now = Date.now();
-    const last = lastSuccess.startedAt?.getTime?.() ?? 0;
+    const last = lastSuccess.createdAt?.getTime?.() ?? 0;
 
     if (now - last >= WINDOW_MS) return { type: 'ok' };
 
     const remainingMs = WINDOW_MS - (now - last);
+    const nextAllowedAt = new Date(now + remainingMs);
     const wait = this.formatDuration(remainingMs);
+    const nextAllowedStr = this.formatDateTime(nextAllowedAt);
 
     return {
       type: 'limited',
       message:
         `⚠️ Немедленную генерацию можно запускать только 1 раз в 24 часа.\n\n` +
+        `Следующая попытка доступна: ${nextAllowedStr}\n` +
         `Попробуйте снова через ${wait}.`,
     };
   }
@@ -421,13 +433,14 @@ export class SummaryChannelService {
    * Шаг 5:
    * - если в посте <10 слов → status=ok, summary=original (AI не вызываем)
    * - LLM вызываем батчами по 15 постов
-   * - сохраняем original + summary_text + status + reason в results
+   * - сохраняем original + summary_text + status + reason + post_url в results
    *
    * Правило: если status != ok → summaryText = ''
    */
   private async summarizeAndPrepareResults(
     posts: ParsedChannelPost[],
     runId: string,
+    channelUsername: string,
   ): Promise<{
     summaries: SummaryItemForDigest[];
     resultsToStore: Array<Partial<SummaryChannelResultEntity>>;
@@ -519,6 +532,8 @@ export class SummaryChannelService {
 
       if (status !== 'ok') summaryText = '';
 
+      const postUrl = `https://t.me/${channelUsername}/${p.id}`;
+
       summaries.push({
         id: p.id,
         summary: summaryText,
@@ -533,6 +548,7 @@ export class SummaryChannelService {
         summaryText: summaryText,
         status,
         reason,
+        postUrl,
       });
     }
 
@@ -546,7 +562,7 @@ export class SummaryChannelService {
   }): string {
     const { channelUsernameWithAt, channelUsername, summaries } = params;
 
-    const title = `<b>Дайджест за последние ${this.HOURS_WINDOW}ч</b>: ${this.escapeHtml(
+    const title = `<b>Саммари за последние ${this.HOURS_WINDOW}ч</b>: ${this.escapeHtml(
       channelUsernameWithAt,
     )}`;
 
@@ -774,6 +790,13 @@ export class SummaryChannelService {
     if (h <= 0) return `${m}м`;
     if (m === 0) return `${h}ч`;
     return `${h}ч ${m}м`;
+  }
+
+  private formatDateTime(date: Date): string {
+    const day = String(date.getDate()).padStart(2, '0');
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const year = date.getFullYear();
+    return `${day}.${month}.${year}`;
   }
 
   private safeErrorText(e: any): string {

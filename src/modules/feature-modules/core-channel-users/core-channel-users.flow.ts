@@ -148,7 +148,7 @@ export class CoreChannelUsersFlow {
 
     const lines = res.items.map((it) => {
       const uname = it.username ? `@${it.username}` : '(no username)';
-      return `${uname} | id:${it.telegramUserId} — ${it.commentsCount} комментариев — ${it.postsCount} постов`;
+      return `${uname} — ${it.commentsCount} комментариев в ${it.postsCount} пост${it.postsCount % 100 === 11 || it.postsCount % 10 !== 1 ? 'ах' : 'у'}`;
     });
 
     await ctx.reply(
