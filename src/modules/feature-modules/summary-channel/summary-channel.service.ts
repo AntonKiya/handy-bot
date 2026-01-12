@@ -464,8 +464,6 @@ export class SummaryChannelService {
         const batchItems: AiSummaryItem[] =
           await this.summaryChannelAiService.summarizePosts(inputMap);
 
-        console.log('batchItems', batchItems);
-
         for (const item of batchItems) {
           const id = String(item?.id ?? '').trim();
           if (!id) continue;
@@ -676,8 +674,6 @@ export class SummaryChannelService {
       const bt = b.date ? b.date.getTime() : Number.POSITIVE_INFINITY;
       return at - bt;
     });
-
-    console.log('result', result);
 
     this.logger.debug(
       `Fetched ${result.length} text posts for channel ${channelSlug} (last ${this.HOURS_WINDOW}h)`,
