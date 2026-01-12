@@ -17,6 +17,8 @@ export type AiSummaryItem = {
 export class SummaryChannelAiService {
   private readonly logger = new Logger(SummaryChannelAiService.name);
 
+  private readonly MAX_RETRIES = 2;
+
   constructor(private readonly qwenClient: QwenClient) {}
 
   async summarizePosts(posts: SummaryInputMap): Promise<AiSummaryItem[]> {
@@ -29,6 +31,7 @@ export class SummaryChannelAiService {
       type: 'json_schema',
       json_schema: {
         name: 'summary_posts_v1',
+        strict: true,
         schema: {
           type: 'object',
           additionalProperties: false,
@@ -56,28 +59,110 @@ export class SummaryChannelAiService {
       },
     };
 
-    const raw = await this.qwenClient.generateText(prompt, responseFormat);
+    let lastError: Error | null = null;
 
-    console.log('raw', raw);
+    for (let attempt = 1; attempt <= this.MAX_RETRIES; attempt++) {
+      try {
+        const raw = await this.qwenClient.generateText(prompt, responseFormat);
 
-    const parsed = JSON.parse(raw);
+        this.logger.debug(
+          `LLM raw response (attempt ${attempt}): ${String(raw).slice(0, 500)}`,
+        );
 
-    const items = parsed?.posts ?? parsed?.items;
+        const items = this.parseResponse(raw);
 
-    if (!Array.isArray(items)) {
-      this.logger.warn(
-        `LLM response has no items[] array. Raw: ${String(raw).slice(0, 500)}`,
-      );
-      return [];
+        if (items !== null) {
+          return items;
+        }
+
+        this.logger.warn(
+          `LLM response parsing failed (attempt ${attempt}/${this.MAX_RETRIES}). Raw: ${String(raw).slice(0, 300)}`,
+        );
+      } catch (e: any) {
+        lastError = e;
+        this.logger.error(
+          `LLM call failed (attempt ${attempt}/${this.MAX_RETRIES}): ${e.message}`,
+        );
+      }
+
+      // Небольшая задержка перед retry
+      if (attempt < this.MAX_RETRIES) {
+        await this.sleep(500 * attempt);
+      }
     }
 
-    return items as AiSummaryItem[];
+    this.logger.error(
+      `All ${this.MAX_RETRIES} LLM attempts failed for ${ids.length} posts`,
+      lastError,
+    );
+
+    return [];
+  }
+
+  private parseResponse(raw: string): AiSummaryItem[] | null {
+    // Проверяем, что raw — строка
+    if (typeof raw !== 'string') {
+      this.logger.warn(`LLM returned non-string: ${typeof raw}`);
+      return null;
+    }
+
+    const trimmed = raw.trim();
+
+    // Проверяем, что это похоже на JSON
+    if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) {
+      this.logger.warn(
+        `LLM response is not JSON-like: ${trimmed.slice(0, 100)}`,
+      );
+      return null;
+    }
+
+    let parsed: any;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch (e) {
+      this.logger.warn(`JSON parse error: ${(e as Error).message}`);
+      return null;
+    }
+
+    // Поддержка обоих ключей: items (правильный) и posts (fallback)
+    const items = parsed?.items ?? parsed?.posts;
+
+    if (!Array.isArray(items)) {
+      this.logger.warn(`Parsed response has no items[] or posts[] array`);
+      return null;
+    }
+
+    // Валидация каждого item
+    const validated: AiSummaryItem[] = [];
+
+    for (const item of items) {
+      if (!item || typeof item !== 'object') continue;
+
+      const id = String(item.id ?? '').trim();
+      if (!id) continue;
+
+      const status = this.validateStatus(item.status);
+      const summary = status === 'ok' ? String(item.summary ?? '').trim() : '';
+      const reason = item.reason ? String(item.reason).trim() : undefined;
+
+      validated.push({ id, status, summary, reason });
+    }
+
+    if (validated.length === 0 && items.length > 0) {
+      this.logger.warn(`All ${items.length} items failed validation`);
+      return null;
+    }
+
+    return validated;
+  }
+
+  private validateStatus(status: unknown): 'ok' | 'skipped' | 'error' {
+    if (status === 'skipped') return 'skipped';
+    if (status === 'error') return 'error';
+    return 'ok';
   }
 
   private buildPrompt(posts: SummaryInputMap): string {
-    // We rely on response_format (JSON Schema) for output structure.
-    // Prompt focuses only on task + quality constraints + how to fill status/reason.
-
     const instructions = `
       Ты — система суммаризации постов.
       
@@ -104,9 +189,19 @@ export class SummaryChannelAiService {
       - Summary должно быть ровно одно предложение (одно законченное предложение).
       - Если status = ok, reason не заполняй.
       - Если status = skipped или error, заполни reason (коротко), а summary оставь пустым.
-      `.trim();
+      
+      КРИТИЧЕСКИ ВАЖНО:
+      - Обрабатывай посты СТРОГО В ТОМ ЖЕ ПОРЯДКЕ, в каком они даны.
+      - Каждый id в ответе ДОЛЖЕН ТОЧНО соответствовать id из входных данных.
+      - НЕ путай содержимое разных постов между собой.
+      
+      ВЫХОДНОЙ ФОРМАТ:
+      Верни ТОЛЬКО валидный JSON с единственным ключом "items" — массив объектов.
+      НЕ используй ключ "posts". Используй ТОЛЬКО ключ "items".
+      Пример:
+      {"items":[{"id":"123","status":"ok","summary":"Текст саммари."}]}
+`.trim();
 
-    // Provide inputs as structured JSON to reduce ambiguity.
     const input = {
       posts: Object.entries(posts).map(([id, text]) => ({
         id: String(id),
@@ -115,5 +210,9 @@ export class SummaryChannelAiService {
     };
 
     return `${instructions}\n\nВходные данные (JSON):\n${JSON.stringify(input)}`;
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 }

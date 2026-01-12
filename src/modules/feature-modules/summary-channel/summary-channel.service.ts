@@ -49,7 +49,7 @@ export class SummaryChannelService {
   private readonly logger = new Logger(SummaryChannelService.name);
 
   private readonly HOURS_WINDOW = 24;
-  private readonly LLM_BATCH_SIZE = 15;
+  private readonly LLM_BATCH_SIZE = 10;
   private readonly SHORT_WORDS_THRESHOLD = 10;
 
   constructor(
@@ -676,6 +676,8 @@ export class SummaryChannelService {
       const bt = b.date ? b.date.getTime() : Number.POSITIVE_INFINITY;
       return at - bt;
     });
+
+    console.log('result', result);
 
     this.logger.debug(
       `Fetched ${result.length} text posts for channel ${channelSlug} (last ${this.HOURS_WINDOW}h)`,
