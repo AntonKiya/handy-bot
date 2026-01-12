@@ -39,7 +39,7 @@ type PlannedTarget = {
 
 type SummaryItemForDigest = {
   id: number;
-  summary: string; // может быть '' если status != ok
+  summary: string; // '' если status != ok
   status: 'ok' | 'skipped' | 'error';
   reason?: string | null;
 };
@@ -89,11 +89,11 @@ export class SummaryChannelService {
   }
 
   /**
-   * - лимит immediate 1 раз / 24 часа (без next_allowed_at)
+   * - лимит immediate 1 раз / 24 часа
    * - запись summary_channel_runs + summary_channel_results
    *
    * Важно: этот метод возвращает готовые тексты для отправки пользователю,
-   * а Flow решает КАК отправлять (reply/edit, сколько сообщений и т.д.).
+   * а Flow решает КАК отправлять.
    */
   async runImmediateSummary(params: {
     userId: number;
@@ -108,11 +108,8 @@ export class SummaryChannelService {
       channelUsername,
     } = params;
 
-    // 1) Лимит: 1 успешный immediate-run / 24 часа на пользователя
     const limitCheck = await this.checkImmediateLimit(userId);
-    if (limitCheck.type === 'limited') {
-      return limitCheck;
-    }
+    if (limitCheck.type === 'limited') return limitCheck;
 
     const run = this.summaryChannelRunRepository.create({
       userId: String(userId),
@@ -135,7 +132,6 @@ export class SummaryChannelService {
     }
 
     try {
-      // 3) Берём посты за окно
       const posts = await this.fetchRecentTextPostsForChannel(
         channelUsernameWithAt,
       );
@@ -152,11 +148,9 @@ export class SummaryChannelService {
         };
       }
 
-      // 4) Генерация саммари
       const { summaries, resultsToStore } =
         await this.summarizeAndPrepareResults(posts, savedRun.id);
 
-      // 5) Сохраняем results (bulk)
       if (resultsToStore.length) {
         await this.summaryChannelResultRepository.insert(resultsToStore);
       }
@@ -166,7 +160,6 @@ export class SummaryChannelService {
         error: null,
       });
 
-      // 7) Формат дайджеста + ссылки
       const digestText = this.buildDigestMessage({
         channelUsernameWithAt,
         channelUsername,
@@ -218,7 +211,6 @@ export class SummaryChannelService {
 
     const channelUsernameWithAt = `@${usernameNoAt}`;
 
-    // Анти-дубли: running или success planned-run за последние 24 часа — пропускаем
     const skip = await this.shouldSkipPlannedRun({
       userId,
       channelTelegramChatId,
@@ -250,7 +242,6 @@ export class SummaryChannelService {
         channelUsernameWithAt,
       );
 
-      // Ничего не шлём пользователю, просто фиксируем успешный run без результатов
       if (!posts.length) {
         await this.summaryChannelRunRepository.update(savedRun.id, {
           status: SummaryChannelRunStatus.Success,
@@ -407,17 +398,13 @@ export class SummaryChannelService {
       order: { startedAt: 'DESC' },
     });
 
-    if (!lastSuccess) {
-      return { type: 'ok' };
-    }
+    if (!lastSuccess) return { type: 'ok' };
 
     const WINDOW_MS = 24 * 60 * 60 * 1000;
     const now = Date.now();
     const last = lastSuccess.startedAt?.getTime?.() ?? 0;
 
-    if (now - last >= WINDOW_MS) {
-      return { type: 'ok' };
-    }
+    if (now - last >= WINDOW_MS) return { type: 'ok' };
 
     const remainingMs = WINDOW_MS - (now - last);
     const wait = this.formatDuration(remainingMs);
@@ -434,9 +421,9 @@ export class SummaryChannelService {
    * Шаг 5:
    * - если в посте <10 слов → status=ok, summary=original (AI не вызываем)
    * - LLM вызываем батчами по 15 постов
-   * - сохраняем original + итоговый summary + status + reason в results
+   * - сохраняем original + summary_text + status + reason в results
    *
-   * ВАЖНО: если status != ok → summaryText = ''
+   * Правило: если status != ok → summaryText = ''
    */
   private async summarizeAndPrepareResults(
     posts: ParsedChannelPost[],
@@ -445,7 +432,6 @@ export class SummaryChannelService {
     summaries: SummaryItemForDigest[];
     resultsToStore: Array<Partial<SummaryChannelResultEntity>>;
   }> {
-    // 1) Отделяем короткие посты (<10 слов) — их не шлём в LLM
     const needAi: ParsedChannelPost[] = [];
     const forcedSummaries: Record<string, { status: 'ok'; summary: string }> =
       {};
@@ -461,7 +447,6 @@ export class SummaryChannelService {
       }
     }
 
-    // 2) Генерим summary для остальных батчами по 15
     const aiResults: Record<
       string,
       { status: 'ok' | 'skipped' | 'error'; summary: string; reason?: string }
@@ -479,7 +464,8 @@ export class SummaryChannelService {
         const batchItems: AiSummaryItem[] =
           await this.summaryChannelAiService.summarizePosts(inputMap);
 
-        // ✅ КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: summarizePosts возвращает МАССИВ, не map
+        console.log('batchItems', batchItems);
+
         for (const item of batchItems) {
           const id = String(item?.id ?? '').trim();
           if (!id) continue;
@@ -503,11 +489,9 @@ export class SummaryChannelService {
           `LLM batch failed (size=${batch.length}), will fallback to snippets for these posts`,
           e as any,
         );
-        // fallback будет ниже
       }
     }
 
-    // 3) Собираем итог: порядок сохраняем как в posts
     const summaries: SummaryItemForDigest[] = [];
     const resultsToStore: Array<Partial<SummaryChannelResultEntity>> = [];
 
@@ -515,7 +499,6 @@ export class SummaryChannelService {
       const key = String(p.id);
       const original = this.normalizeOneLine(p.text);
 
-      // priority: forced(<10 слов) -> ai -> fallback
       const forced = forcedSummaries[key];
       const fromAi = aiResults[key];
 
@@ -531,15 +514,12 @@ export class SummaryChannelService {
         reason = fromAi.reason ?? null;
         summaryText = fromAi.status === 'ok' ? fromAi.summary : '';
       } else {
-        // fallback: не получили ответ по id / батч упал
+        // fallback: AI не вернул item по этому id / батч упал
         status = 'ok';
         summaryText = original.slice(0, 120).trim();
       }
 
-      // гарантия правила: если status != ok -> summaryText = ''
-      if (status !== 'ok') {
-        summaryText = '';
-      }
+      if (status !== 'ok') summaryText = '';
 
       summaries.push({
         id: p.id,
@@ -548,15 +528,14 @@ export class SummaryChannelService {
         reason,
       });
 
-      // предполагается, что summaryStatus/summaryReason уже добавлены в Entity
       resultsToStore.push({
         runId,
         telegramPostId: p.id,
         originalText: original,
         summaryText: summaryText,
-        summaryStatus: status as any,
-        summaryReason: reason,
-      } as any);
+        status,
+        reason,
+      });
     }
 
     return { summaries, resultsToStore };
@@ -657,7 +636,6 @@ export class SummaryChannelService {
 
         if (date && date.getTime() < cutoff) return;
 
-        // Берём именно основной текст поста, а не текст реплая:
         const textEl = msg
           .find('.tgme_widget_message_text.js-message_text')
           .first();
@@ -665,7 +643,6 @@ export class SummaryChannelService {
         const text = textEl.text().trim();
         if (!text) return;
 
-        // Фильтр по окну времени
         if (!date || date.getTime() >= cutoff) {
           if (!seenPostIds.has(id)) {
             seenPostIds.add(id);
@@ -678,9 +655,7 @@ export class SummaryChannelService {
 
       before = Math.min(...idsOnPage);
 
-      if (oldestDateOnPage && oldestDateOnPage.getTime() < cutoff) {
-        break;
-      }
+      if (oldestDateOnPage && oldestDateOnPage.getTime() < cutoff) break;
     }
 
     if (page >= MAX_PAGES) {
@@ -696,7 +671,6 @@ export class SummaryChannelService {
       }
     }
 
-    // Сортировка по date ASC (посты без даты — в конец)
     result.sort((a, b) => {
       const at = a.date ? a.date.getTime() : Number.POSITIVE_INFINITY;
       const bt = b.date ? b.date.getTime() : Number.POSITIVE_INFINITY;
@@ -714,7 +688,7 @@ export class SummaryChannelService {
    * Оставляем как было — может использоваться в других местах.
    * Но Flow теперь должен использовать runImmediateSummary().
    *
-   * Важно: теперь если status != ok → summary = ''.
+   * Правило: status != ok → summary = ''
    */
   async getRecentPostSummariesForChannel(
     channelNameWithAt: string,
@@ -748,8 +722,10 @@ export class SummaryChannelService {
     }
 
     const map: Record<string, AiSummaryItem> = {};
-    for (const it of items) {
-      if (it?.id) map[String(it.id)] = it;
+    if (Array.isArray(items)) {
+      for (const it of items) {
+        if (it?.id) map[String(it.id)] = it;
+      }
     }
 
     return posts.map((p) => {
@@ -757,7 +733,6 @@ export class SummaryChannelService {
       const item = map[key];
       const status = item?.status ?? 'ok';
 
-      // правило: status != ok → ''
       const summary =
         status === 'ok' ? this.normalizeOneLine(item?.summary ?? '') : '';
 
@@ -815,7 +790,6 @@ export class SummaryChannelService {
 
     if (t.length <= maxLen) return [t];
 
-    // MVP: простой безопасный сплит по пустым строкам
     const parts = t.split('\n\n');
     const chunks: string[] = [];
 
