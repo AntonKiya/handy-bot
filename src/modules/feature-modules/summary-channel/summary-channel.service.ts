@@ -7,6 +7,7 @@ import { Telegraf } from 'telegraf';
 import {
   SummaryChannelAiService,
   SummaryInputMap,
+  AiSummaryItem,
 } from './summary-channel-ai.service';
 import {
   SummaryChannelRunEntity,
@@ -34,6 +35,13 @@ type PlannedTarget = {
   userId: string; // telegram user id (bigint-string)
   channelTelegramChatId: string; // channel telegram_chat_id (bigint-string)
   channelUsername: string; // without @
+};
+
+type SummaryItemForDigest = {
+  id: number;
+  summary: string; // может быть '' если status != ok
+  status: 'ok' | 'skipped' | 'error';
+  reason?: string | null;
 };
 
 @Injectable()
@@ -144,7 +152,7 @@ export class SummaryChannelService {
         };
       }
 
-      // 4) Генерация саммари по ТЗ (частично): <10 слов → оригинал, батчи по 15
+      // 4) Генерация саммари
       const { summaries, resultsToStore } =
         await this.summarizeAndPrepareResults(posts, savedRun.id);
 
@@ -327,15 +335,6 @@ export class SummaryChannelService {
   }
 
   private async getPlannedTargets(): Promise<PlannedTarget[]> {
-    /**
-     * MVP: все user_channels по feature SUMMARY_CHANNEL, где deleted_at IS NULL
-     * и у канала есть username.
-     *
-     * Берём:
-     * - u.telegram_user_id
-     * - c.telegram_chat_id
-     * - c.username
-     */
     const rows = await this.userChannelRepository
       .createQueryBuilder('uc')
       .innerJoin('uc.user', 'u')
@@ -432,35 +431,41 @@ export class SummaryChannelService {
   }
 
   /**
-   * Шаг 5 (MVP-версия):
-   * - если в посте <10 слов → summary = original
+   * Шаг 5:
+   * - если в посте <10 слов → status=ok, summary=original (AI не вызываем)
    * - LLM вызываем батчами по 15 постов
-   * - сохраняем original + итоговый summary в results
+   * - сохраняем original + итоговый summary + status + reason в results
+   *
+   * ВАЖНО: если status != ok → summaryText = ''
    */
   private async summarizeAndPrepareResults(
     posts: ParsedChannelPost[],
     runId: string,
   ): Promise<{
-    summaries: { id: number; summary: string }[];
+    summaries: SummaryItemForDigest[];
     resultsToStore: Array<Partial<SummaryChannelResultEntity>>;
   }> {
     // 1) Отделяем короткие посты (<10 слов) — их не шлём в LLM
     const needAi: ParsedChannelPost[] = [];
-    const forcedSummaries: Record<string, string> = {};
+    const forcedSummaries: Record<string, { status: 'ok'; summary: string }> =
+      {};
 
     for (const p of posts) {
       const original = this.normalizeOneLine(p.text);
       const wc = this.countWords(original);
 
       if (wc > 0 && wc < this.SHORT_WORDS_THRESHOLD) {
-        forcedSummaries[String(p.id)] = original;
+        forcedSummaries[String(p.id)] = { status: 'ok', summary: original };
       } else {
         needAi.push({ ...p, text: original });
       }
     }
 
     // 2) Генерим summary для остальных батчами по 15
-    const aiSummaries: Record<string, string> = {};
+    const aiResults: Record<
+      string,
+      { status: 'ok' | 'skipped' | 'error'; summary: string; reason?: string }
+    > = {};
 
     const batches = this.chunkArray(needAi, this.LLM_BATCH_SIZE);
 
@@ -471,42 +476,87 @@ export class SummaryChannelService {
       }
 
       try {
-        const batchMap =
+        const batchItems: AiSummaryItem[] =
           await this.summaryChannelAiService.summarizePosts(inputMap);
-        for (const [k, v] of Object.entries(batchMap)) {
-          aiSummaries[k] = this.normalizeOneLine(v);
+
+        // ✅ КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: summarizePosts возвращает МАССИВ, не map
+        for (const item of batchItems) {
+          const id = String(item?.id ?? '').trim();
+          if (!id) continue;
+
+          const status: 'ok' | 'skipped' | 'error' =
+            item.status === 'skipped' || item.status === 'error'
+              ? item.status
+              : 'ok';
+
+          const reason = item.reason
+            ? this.normalizeOneLine(item.reason)
+            : undefined;
+
+          const summary =
+            status === 'ok' ? this.normalizeOneLine(item.summary ?? '') : '';
+
+          aiResults[id] = { status, summary, reason };
         }
       } catch (e) {
         this.logger.error(
           `LLM batch failed (size=${batch.length}), will fallback to snippets for these posts`,
           e as any,
         );
-        // фоллбек будет ниже при сборке результата
+        // fallback будет ниже
       }
     }
 
     // 3) Собираем итог: порядок сохраняем как в posts
-    const summaries: { id: number; summary: string }[] = [];
+    const summaries: SummaryItemForDigest[] = [];
     const resultsToStore: Array<Partial<SummaryChannelResultEntity>> = [];
 
     for (const p of posts) {
       const key = String(p.id);
       const original = this.normalizeOneLine(p.text);
 
+      // priority: forced(<10 слов) -> ai -> fallback
       const forced = forcedSummaries[key];
-      const fromAi = aiSummaries[key];
+      const fromAi = aiResults[key];
 
-      // <10 слов → оригинал; иначе LLM; иначе fallback snippet
-      const summary = (forced ?? fromAi ?? original.slice(0, 120)).trim();
+      let status: 'ok' | 'skipped' | 'error' = 'ok';
+      let reason: string | null = null;
+      let summaryText = '';
 
-      summaries.push({ id: p.id, summary });
+      if (forced) {
+        status = 'ok';
+        summaryText = forced.summary;
+      } else if (fromAi) {
+        status = fromAi.status;
+        reason = fromAi.reason ?? null;
+        summaryText = fromAi.status === 'ok' ? fromAi.summary : '';
+      } else {
+        // fallback: не получили ответ по id / батч упал
+        status = 'ok';
+        summaryText = original.slice(0, 120).trim();
+      }
 
+      // гарантия правила: если status != ok -> summaryText = ''
+      if (status !== 'ok') {
+        summaryText = '';
+      }
+
+      summaries.push({
+        id: p.id,
+        summary: summaryText,
+        status,
+        reason,
+      });
+
+      // предполагается, что summaryStatus/summaryReason уже добавлены в Entity
       resultsToStore.push({
         runId,
         telegramPostId: p.id,
         originalText: original,
-        summaryText: summary,
-      });
+        summaryText: summaryText,
+        summaryStatus: status as any,
+        summaryReason: reason,
+      } as any);
     }
 
     return { summaries, resultsToStore };
@@ -515,7 +565,7 @@ export class SummaryChannelService {
   private buildDigestMessage(params: {
     channelUsernameWithAt: string;
     channelUsername: string; // без @
-    summaries: { id: number; summary: string }[];
+    summaries: SummaryItemForDigest[];
   }): string {
     const { channelUsernameWithAt, channelUsername, summaries } = params;
 
@@ -525,8 +575,13 @@ export class SummaryChannelService {
 
     const blocks = summaries.map((item, idx) => {
       const url = `https://t.me/${channelUsername}/${item.id}`;
-      const summaryText = this.escapeHtml(this.normalizeOneLine(item.summary));
-      return `${idx + 1}. ${summaryText}\n<a href="${url}">К оригинальному посту →</a>`;
+
+      const text =
+        item.status === 'ok'
+          ? this.escapeHtml(this.normalizeOneLine(item.summary))
+          : this.escapeHtml(this.normalizeOneLine(item.reason ?? '—'));
+
+      return `${idx + 1}. ${text}\n<a href="${url}">К оригинальному посту →</a>`;
     });
 
     return `${title}\n\n${blocks.join('\n\n')}`;
@@ -628,8 +683,6 @@ export class SummaryChannelService {
       }
     }
 
-    // Если упёрлись в лимит страниц и при этом не достигли cutoff —
-    // вероятно, за 24 часа постов слишком много, и выборка может быть неполной.
     if (page >= MAX_PAGES) {
       const oldestDate = result
         .map((p) => p.date)
@@ -660,6 +713,8 @@ export class SummaryChannelService {
   /**
    * Оставляем как было — может использоваться в других местах.
    * Но Flow теперь должен использовать runImmediateSummary().
+   *
+   * Важно: теперь если status != ok → summary = ''.
    */
   async getRecentPostSummariesForChannel(
     channelNameWithAt: string,
@@ -678,10 +733,9 @@ export class SummaryChannelService {
       inputMap[String(p.id)] = p.text;
     }
 
-    let summariesMap: Record<string, string> = {};
+    let items: AiSummaryItem[] = [];
     try {
-      summariesMap =
-        await this.summaryChannelAiService.summarizePosts(inputMap);
+      items = await this.summaryChannelAiService.summarizePosts(inputMap);
     } catch (e) {
       this.logger.error(
         `Failed to summarize posts for channel ${channelNameWithAt}, fallback to raw text snippets`,
@@ -693,9 +747,20 @@ export class SummaryChannelService {
       }));
     }
 
+    const map: Record<string, AiSummaryItem> = {};
+    for (const it of items) {
+      if (it?.id) map[String(it.id)] = it;
+    }
+
     return posts.map((p) => {
       const key = String(p.id);
-      const summary = summariesMap[key] ?? p.text.slice(0, 120);
+      const item = map[key];
+      const status = item?.status ?? 'ok';
+
+      // правило: status != ok → ''
+      const summary =
+        status === 'ok' ? this.normalizeOneLine(item?.summary ?? '') : '';
+
       return { id: p.id, summary };
     });
   }
