@@ -419,32 +419,36 @@ export class SummaryChannelService {
       };
     }
 
-    const lastSuccess = await this.summaryChannelRunRepository.findOne({
-      where: {
-        userId: String(userId),
-        isImmediateRun: true,
-        status: SummaryChannelRunStatus.Success,
-      },
-      order: { createdAt: 'DESC' },
-    });
-
-    if (!lastSuccess) return { type: 'ok' };
-
     const WINDOW_MS = 24 * 60 * 60 * 1000;
+    const cutoff = new Date(Date.now() - WINDOW_MS);
+
+    const stats = await this.summaryChannelRunRepository
+      .createQueryBuilder('r')
+      .select('COUNT(*)', 'cnt')
+      .addSelect('MIN(r.createdAt)', 'oldest')
+      .where('r.userId = :userId', { userId: String(userId) })
+      .andWhere('r.isImmediateRun = true')
+      .andWhere('r.status = :status', {
+        status: SummaryChannelRunStatus.Success,
+      })
+      .andWhere('r.createdAt >= :cutoff', { cutoff })
+      .getRawOne<{ cnt: string; oldest: string | null }>();
+
+    const used = Number(stats?.cnt ?? 0);
+    if (!Number.isFinite(used) || used < 3) return { type: 'ok' };
+
     const now = Date.now();
-    const last = lastSuccess.createdAt?.getTime?.() ?? 0;
+    const oldestTs = stats?.oldest ? new Date(stats.oldest).getTime() : 0;
 
-    if (now - last >= WINDOW_MS) return { type: 'ok' };
-
-    const remainingMs = WINDOW_MS - (now - last);
-    const nextAllowedAt = new Date(now + remainingMs);
+    const nextAllowedAt = new Date(oldestTs + WINDOW_MS);
+    const remainingMs = Math.max(0, nextAllowedAt.getTime() - now);
     const wait = this.formatDuration(remainingMs);
     const nextAllowedStr = this.formatDateTime(nextAllowedAt);
 
     return {
       type: 'limited',
       message:
-        `⚠️ Немедленную генерацию можно запускать только 1 раз в 24 часа.\n\n` +
+        `⚠️ Немедленную генерацию можно запускать только 3 раза в 24 часа.\n\n` +
         `Следующая попытка доступна: ${nextAllowedStr}\n` +
         `Попробуйте снова через ${wait}.`,
     };
