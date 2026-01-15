@@ -10,7 +10,7 @@ export function buildMainMenuKeyboard() {
   return Markup.inlineKeyboard([
     [
       Markup.button.callback(
-        'Саммари каналов 📝🎯',
+        'Саммари постов канала 📝🎯',
         SUMMARY_CHANNEL_CB.openMenu,
       ),
     ],
@@ -22,7 +22,7 @@ export function buildMainMenuKeyboard() {
     ],
     [
       Markup.button.callback(
-        'Ядро пользователей сообщества',
+        'Ядро комментаторов 🏆',
         `${CORE_CHANNEL_USERS_NAMESPACE}:${CoreChannelUsersAction.OpenMenu}`,
       ),
     ],

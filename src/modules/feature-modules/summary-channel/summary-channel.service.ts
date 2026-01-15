@@ -1,3 +1,5 @@
+// src/telegram-bot/features/summary-channel/summary-channel.service.ts
+
 import { Injectable, Inject, Logger } from '@nestjs/common';
 import * as cheerio from 'cheerio';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -144,7 +146,7 @@ export class SummaryChannelService {
 
         return {
           type: 'empty',
-          message: `Нет постов для саммари в канале '${channelUsernameWithAt}'.`,
+          message: `В канале ${channelUsernameWithAt} сегодня без обновлений.`,
         };
       }
 
@@ -220,11 +222,21 @@ export class SummaryChannelService {
 
     const channelUsernameWithAt = `@${usernameNoAt}`;
 
+    this.logger.log(
+      `Planned summary start: userId=${userId}, channel=${channelUsernameWithAt}, channelTelegramChatId=${channelTelegramChatId}`,
+    );
+
     const skip = await this.shouldSkipPlannedRun({
       userId,
       channelTelegramChatId,
     });
-    if (skip) return;
+
+    if (skip) {
+      this.logger.log(
+        `Planned summary skipped: userId=${userId}, channel=${channelUsernameWithAt} (reason=shouldSkipPlannedRun)`,
+      );
+      return;
+    }
 
     const run = this.summaryChannelRunRepository.create({
       userId,
@@ -246,21 +258,42 @@ export class SummaryChannelService {
       return;
     }
 
+    this.logger.log(
+      `Planned summary run record created: runId=${savedRun.id}, userId=${userId}, channel=${channelUsernameWithAt}`,
+    );
+
     try {
       const posts = await this.fetchRecentTextPostsForChannel(
         channelUsernameWithAt,
       );
 
+      this.logger.log(
+        `Planned summary posts fetched: runId=${savedRun.id}, userId=${userId}, channel=${channelUsernameWithAt}, posts=${posts.length}`,
+      );
+
       if (!posts.length) {
+        await this.sendDigestToUser(
+          userId,
+          `В канале ${channelUsernameWithAt} сегодня без обновлений.`,
+        );
+
         await this.summaryChannelRunRepository.update(savedRun.id, {
           status: SummaryChannelRunStatus.Success,
           error: null,
         });
+
+        this.logger.log(
+          `Planned summary finished (empty): runId=${savedRun.id}, userId=${userId}, channel=${channelUsernameWithAt}`,
+        );
         return;
       }
 
       const { summaries, resultsToStore } =
         await this.summarizeAndPrepareResults(posts, savedRun.id, usernameNoAt);
+
+      this.logger.log(
+        `Planned summary prepared: runId=${savedRun.id}, userId=${userId}, channel=${channelUsernameWithAt}, items=${summaries.length}, toStore=${resultsToStore.length}`,
+      );
 
       if (resultsToStore.length) {
         await this.summaryChannelResultRepository.insert(resultsToStore);
@@ -278,9 +311,13 @@ export class SummaryChannelService {
         status: SummaryChannelRunStatus.Success,
         error: null,
       });
+
+      this.logger.log(
+        `Planned summary finished (success): runId=${savedRun.id}, userId=${userId}, channel=${channelUsernameWithAt}, posts=${posts.length}`,
+      );
     } catch (e: any) {
       this.logger.error(
-        `Planned summary failed for userId=${userId}, channel=${channelUsernameWithAt}`,
+        `Planned summary failed for userId=${userId}, channel=${channelUsernameWithAt}, runId=${savedRun?.id ?? 'unknown'}`,
         e,
       );
 
@@ -315,23 +352,7 @@ export class SummaryChannelService {
     });
     if (running) return true;
 
-    const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
-
-    const recentSuccess = await this.summaryChannelRunRepository
-      .createQueryBuilder('r')
-      .where('r.userId = :userId', { userId: String(userId) })
-      .andWhere('r.channelTelegramChatId = :channelTelegramChatId', {
-        channelTelegramChatId: String(channelTelegramChatId),
-      })
-      .andWhere('r.isImmediateRun = false')
-      .andWhere('r.status = :status', {
-        status: SummaryChannelRunStatus.Success,
-      })
-      .andWhere('r.startedAt >= :cutoff', { cutoff })
-      .orderBy('r.startedAt', 'DESC')
-      .getOne();
-
-    return !!recentSuccess;
+    return false;
   }
 
   private async getPlannedTargets(): Promise<PlannedTarget[]> {
@@ -398,32 +419,36 @@ export class SummaryChannelService {
       };
     }
 
-    const lastSuccess = await this.summaryChannelRunRepository.findOne({
-      where: {
-        userId: String(userId),
-        isImmediateRun: true,
-        status: SummaryChannelRunStatus.Success,
-      },
-      order: { createdAt: 'DESC' },
-    });
-
-    if (!lastSuccess) return { type: 'ok' };
-
     const WINDOW_MS = 24 * 60 * 60 * 1000;
+    const cutoff = new Date(Date.now() - WINDOW_MS);
+
+    const stats = await this.summaryChannelRunRepository
+      .createQueryBuilder('r')
+      .select('COUNT(*)', 'cnt')
+      .addSelect('MIN(r.createdAt)', 'oldest')
+      .where('r.userId = :userId', { userId: String(userId) })
+      .andWhere('r.isImmediateRun = true')
+      .andWhere('r.status = :status', {
+        status: SummaryChannelRunStatus.Success,
+      })
+      .andWhere('r.createdAt >= :cutoff', { cutoff })
+      .getRawOne<{ cnt: string; oldest: string | null }>();
+
+    const used = Number(stats?.cnt ?? 0);
+    if (!Number.isFinite(used) || used < 3) return { type: 'ok' };
+
     const now = Date.now();
-    const last = lastSuccess.createdAt?.getTime?.() ?? 0;
+    const oldestTs = stats?.oldest ? new Date(stats.oldest).getTime() : 0;
 
-    if (now - last >= WINDOW_MS) return { type: 'ok' };
-
-    const remainingMs = WINDOW_MS - (now - last);
-    const nextAllowedAt = new Date(now + remainingMs);
+    const nextAllowedAt = new Date(oldestTs + WINDOW_MS);
+    const remainingMs = Math.max(0, nextAllowedAt.getTime() - now);
     const wait = this.formatDuration(remainingMs);
     const nextAllowedStr = this.formatDateTime(nextAllowedAt);
 
     return {
       type: 'limited',
       message:
-        `⚠️ Немедленную генерацию можно запускать только 1 раз в 24 часа.\n\n` +
+        `⚠️ Немедленную генерацию можно запускать только 3 раза в 24 часа.\n\n` +
         `Следующая попытка доступна: ${nextAllowedStr}\n` +
         `Попробуйте снова через ${wait}.`,
     };
@@ -574,7 +599,7 @@ export class SummaryChannelService {
           ? this.escapeHtml(this.normalizeOneLine(item.summary))
           : this.escapeHtml(this.normalizeOneLine(item.reason ?? '—'));
 
-      return `${idx + 1}. ${text}\n<a href="${url}">К оригинальному посту →</a>`;
+      return `${idx + 1}. ${text}\n<a href="${url}">К посту →</a>`;
     });
 
     return `${title}\n\n${blocks.join('\n\n')}`;
