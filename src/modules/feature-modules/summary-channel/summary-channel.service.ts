@@ -322,23 +322,7 @@ export class SummaryChannelService {
     });
     if (running) return true;
 
-    const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
-
-    const recentSuccess = await this.summaryChannelRunRepository
-      .createQueryBuilder('r')
-      .where('r.userId = :userId', { userId: String(userId) })
-      .andWhere('r.channelTelegramChatId = :channelTelegramChatId', {
-        channelTelegramChatId: String(channelTelegramChatId),
-      })
-      .andWhere('r.isImmediateRun = false')
-      .andWhere('r.status = :status', {
-        status: SummaryChannelRunStatus.Success,
-      })
-      .andWhere('r.startedAt >= :cutoff', { cutoff })
-      .orderBy('r.startedAt', 'DESC')
-      .getOne();
-
-    return !!recentSuccess;
+    return false;
   }
 
   private async getPlannedTargets(): Promise<PlannedTarget[]> {
