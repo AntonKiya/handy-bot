@@ -41,10 +41,7 @@ import { ScheduleModule } from '@nestjs/schedule';
         autoLoadEntities: true,
         migrationsRun: true,
         migrations: [path.join(__dirname, 'migrations/**/*{.ts,.js}')],
-        ssl:
-          configService.get('NODE_ENV', 'production') === 'development'
-            ? false
-            : { rejectUnauthorized: false },
+        ssl: false,
         extra: {
           max: 20,
           idleTimeoutMillis: 30000,
