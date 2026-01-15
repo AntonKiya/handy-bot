@@ -1,3 +1,5 @@
+// src/telegram-bot/features/summary-channel/summary-channel.service.ts
+
 import { Injectable, Inject, Logger } from '@nestjs/common';
 import * as cheerio from 'cheerio';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -144,7 +146,7 @@ export class SummaryChannelService {
 
         return {
           type: 'empty',
-          message: `Нет постов для саммари в канале '${channelUsernameWithAt}'.`,
+          message: `В канале ${channelUsernameWithAt} сегодня без обновлений.`,
         };
       }
 
@@ -252,6 +254,11 @@ export class SummaryChannelService {
       );
 
       if (!posts.length) {
+        await this.sendDigestToUser(
+          userId,
+          `В канале ${channelUsernameWithAt} сегодня без обновлений.`,
+        );
+
         await this.summaryChannelRunRepository.update(savedRun.id, {
           status: SummaryChannelRunStatus.Success,
           error: null,

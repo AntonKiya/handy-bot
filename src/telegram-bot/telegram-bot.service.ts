@@ -23,7 +23,10 @@ export class TelegramBotService implements OnModuleInit, OnApplicationShutdown {
   ) {}
 
   async onModuleInit() {
-    const token = process.env.BOT_TOKEN;
+    const token =
+      process.env.NODE_ENV === 'production'
+        ? process.env.BOT_TOKEN
+        : process.env.BOT_TOKEN_DEV;
     if (!token) {
       this.logger.error('BOT_TOKEN is not set');
       throw new Error('BOT_TOKEN is required');
