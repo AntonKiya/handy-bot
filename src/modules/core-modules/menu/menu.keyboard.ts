@@ -22,7 +22,7 @@ export function buildMainMenuKeyboard() {
     ],
     [
       Markup.button.callback(
-        'Ядро пользователей сообщества 🏆',
+        'Ядро комментаторов 🏆',
         `${CORE_CHANNEL_USERS_NAMESPACE}:${CoreChannelUsersAction.OpenMenu}`,
       ),
     ],

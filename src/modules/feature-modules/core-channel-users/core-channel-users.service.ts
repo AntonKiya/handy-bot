@@ -579,25 +579,36 @@ export class CoreChannelUsersService {
       };
     }
 
-    const nextAllowedAt = new Date(lastCreatedMs + this.USER_LIMIT_WINDOW_MS);
+    const WINDOW_MS = this.USER_LIMIT_WINDOW_MS;
+    const cutoff = new Date(Date.now() - WINDOW_MS);
 
-    if (
-      nowMs < nextAllowedAt.getTime() &&
-      last.status !== CoreChannelUsersRunStatus.Failed
-    ) {
-      const remainingMs = nextAllowedAt.getTime() - nowMs;
-      const wait = this.formatDuration(remainingMs);
+    const stats = await this.runRepo
+      .createQueryBuilder('r')
+      .select('COUNT(*)', 'cnt')
+      .addSelect('MIN(r.createdAt)', 'oldest')
+      .where('r.userId = :userId', { userId: String(userId) })
+      .andWhere('r.status = :status', {
+        status: CoreChannelUsersRunStatus.Success,
+      })
+      .andWhere('r.createdAt >= :cutoff', { cutoff })
+      .getRawOne<{ cnt: string; oldest: string | null }>();
 
-      return {
-        type: 'limited',
-        nextAllowedAt,
-        message:
-          `⚠️ Отчёт можно генерировать только 1 раз в 24 часа (на пользователя).\n\n` +
-          `Попробуйте снова через ${wait}.`,
-      };
-    }
+    const used = Number(stats?.cnt ?? 0);
+    if (!Number.isFinite(used) || used < 4) return { type: 'ok' };
 
-    return { type: 'ok' };
+    const oldestTs = stats?.oldest ? new Date(stats.oldest).getTime() : 0;
+    const nextAllowedAt = new Date(oldestTs + WINDOW_MS);
+
+    const remainingMs = Math.max(0, nextAllowedAt.getTime() - nowMs);
+    const wait = this.formatDuration(remainingMs);
+
+    return {
+      type: 'limited',
+      nextAllowedAt,
+      message:
+        `⚠️ Отчёт можно генерировать только 4 раза в 24 часа (на пользователя).\n\n` +
+        `Попробуйте снова через ${wait}.`,
+    };
   }
 
   private formatDuration(ms: number): string {
