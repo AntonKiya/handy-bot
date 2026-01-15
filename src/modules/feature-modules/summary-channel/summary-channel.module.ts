@@ -31,7 +31,12 @@ import { Telegraf } from 'telegraf';
     {
       provide: 'TELEGRAF_BOT',
       useFactory: () => {
-        return new Telegraf(process.env.BOT_TOKEN!);
+        const token =
+          process.env.NODE_ENV === 'production'
+            ? process.env.BOT_TOKEN
+            : process.env.BOT_TOKEN_DEV;
+
+        return new Telegraf(token!);
       },
     },
     SummaryChannelService,

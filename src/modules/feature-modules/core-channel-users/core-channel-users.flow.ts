@@ -116,6 +116,10 @@ export class CoreChannelUsersFlow {
     // В MVP: состояние закрываем после ввода канала
     await this.userStateService.clear(userId);
 
+    await ctx.reply(
+      `⏳ Запускаю формирование отчёта для ${channelUsernameWithAt}. Это может занять немного времени...`,
+    );
+
     const runRes =
       await this.coreChannelUsersService.runImmediateCoreUsersReport({
         userId,
@@ -140,7 +144,7 @@ export class CoreChannelUsersFlow {
 
     if (res.type === 'no-data' || !res.items.length) {
       await ctx.reply(
-        `Отчёт по ядру пользователей сообщества для ${channelUsernameWithAt} за ${periodLabel}.\n\n` +
+        `Топ комментаторов канала ${channelUsernameWithAt} за ${periodLabel}.\n\n` +
           `Нет данных за выбранный период.`,
       );
       return;
@@ -152,7 +156,7 @@ export class CoreChannelUsersFlow {
     });
 
     await ctx.reply(
-      `Отчёт по ядру пользователей сообщества для ${channelUsernameWithAt} за ${periodLabel}.\n\n` +
+      `Топ комментаторов канала ${channelUsernameWithAt} за ${periodLabel}:\n\n` +
         lines.join('\n'),
     );
   }
@@ -209,7 +213,7 @@ export class CoreChannelUsersFlow {
 
   private async showPeriodSelectMenu(ctx: Context) {
     const text =
-      'Ядро пользователей сообщества\n\n' +
+      'Ядро комментаторов 🏆\n\n' +
       'Выберите период, за который нужно сформировать отчёт:';
 
     const keyboard = buildCoreUsersPeriodKeyboard();
@@ -244,9 +248,8 @@ export class CoreChannelUsersFlow {
 
     const text =
       `Вы выбрали период: ${periodLabel}.\n\n` +
-      `⚠️ Отчёт можно генерировать только 1 раз в 24 часа (на пользователя).\n` +
-      `Исключение: если последний запуск завершился со статусом "failed", повторный запуск разрешён сразу.\n\n` +
-      `Отправьте @channel_name чтобы продолжить генерацию отчёта (только публичные каналы).`;
+      `⚠️ Отчёт можно генерировать только 4 раза в 24 часа (на пользователя).\n\n` +
+      `Отправьте @channel_name любого публичного канала, чтобы продолжить генерацию отчёта.`;
 
     const keyboard = buildCoreUsersInputKeyboard();
 

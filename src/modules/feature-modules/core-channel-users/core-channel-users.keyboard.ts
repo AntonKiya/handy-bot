@@ -5,8 +5,8 @@ import {
 } from './core-channel-users.callbacks';
 
 const PERIODS: Array<{ label: string; value: CoreChannelUsersPeriod }> = [
-  { label: '14 дней', value: '14d' },
-  { label: '90 дней', value: '90d' },
+  { label: 'За последние 2 недели', value: '14d' },
+  { label: 'За последние 3 месяца', value: '90d' },
 ];
 
 /**

@@ -12,7 +12,7 @@ export class SummaryChannelCron {
    * Плановая генерация саммари раз в день в фиксированное время.
    * Важно: cron — только триггер, бизнес-логика в сервисе.
    */
-  @Cron(CronExpression.EVERY_DAY_AT_6PM)
+  @Cron(CronExpression.EVERY_DAY_AT_3PM)
   async runDaily() {
     this.logger.log('Starting planned summary-channel run...');
     await this.summaryChannelService.runPlannedSummaries();

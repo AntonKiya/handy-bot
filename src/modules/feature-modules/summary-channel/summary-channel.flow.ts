@@ -274,7 +274,7 @@ export class SummaryChannelFlow {
       canDetach = channels.length > 0;
     }
 
-    const text = 'Саммари постов канала — меню';
+    const text = 'Саммари постов канала 📝🎯';
     const keyboard = buildSummaryChannelMenuKeyboard(canDetach);
 
     if ('callbackQuery' in ctx && ctx.callbackQuery) {
