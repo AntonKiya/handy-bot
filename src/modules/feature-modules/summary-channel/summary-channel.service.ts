@@ -595,7 +595,7 @@ export class SummaryChannelService {
           ? this.escapeHtml(this.normalizeOneLine(item.summary))
           : this.escapeHtml(this.normalizeOneLine(item.reason ?? '—'));
 
-      return `${idx + 1}. ${text}\n<a href="${url}">К оригинальному посту →</a>`;
+      return `${idx + 1}. ${text}\n<a href="${url}">К посту →</a>`;
     });
 
     return `${title}\n\n${blocks.join('\n\n')}`;
