@@ -116,6 +116,10 @@ export class CoreChannelUsersFlow {
     // В MVP: состояние закрываем после ввода канала
     await this.userStateService.clear(userId);
 
+    await ctx.reply(
+      `⏳ Запускаю формирование отчёта для ${channelUsernameWithAt}. Это может занять немного времени...`,
+    );
+
     const runRes =
       await this.coreChannelUsersService.runImmediateCoreUsersReport({
         userId,
@@ -152,7 +156,7 @@ export class CoreChannelUsersFlow {
     });
 
     await ctx.reply(
-      `Топ комментаторов канала ${channelUsernameWithAt} за ${periodLabel}.\n\n` +
+      `Топ комментаторов канала ${channelUsernameWithAt} за ${periodLabel}:\n\n` +
         lines.join('\n'),
     );
   }
