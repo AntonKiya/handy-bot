@@ -222,11 +222,21 @@ export class SummaryChannelService {
 
     const channelUsernameWithAt = `@${usernameNoAt}`;
 
+    this.logger.log(
+      `Planned summary start: userId=${userId}, channel=${channelUsernameWithAt}, channelTelegramChatId=${channelTelegramChatId}`,
+    );
+
     const skip = await this.shouldSkipPlannedRun({
       userId,
       channelTelegramChatId,
     });
-    if (skip) return;
+
+    if (skip) {
+      this.logger.log(
+        `Planned summary skipped: userId=${userId}, channel=${channelUsernameWithAt} (reason=shouldSkipPlannedRun)`,
+      );
+      return;
+    }
 
     const run = this.summaryChannelRunRepository.create({
       userId,
@@ -248,9 +258,17 @@ export class SummaryChannelService {
       return;
     }
 
+    this.logger.log(
+      `Planned summary run record created: runId=${savedRun.id}, userId=${userId}, channel=${channelUsernameWithAt}`,
+    );
+
     try {
       const posts = await this.fetchRecentTextPostsForChannel(
         channelUsernameWithAt,
+      );
+
+      this.logger.log(
+        `Planned summary posts fetched: runId=${savedRun.id}, userId=${userId}, channel=${channelUsernameWithAt}, posts=${posts.length}`,
       );
 
       if (!posts.length) {
@@ -263,11 +281,19 @@ export class SummaryChannelService {
           status: SummaryChannelRunStatus.Success,
           error: null,
         });
+
+        this.logger.log(
+          `Planned summary finished (empty): runId=${savedRun.id}, userId=${userId}, channel=${channelUsernameWithAt}`,
+        );
         return;
       }
 
       const { summaries, resultsToStore } =
         await this.summarizeAndPrepareResults(posts, savedRun.id, usernameNoAt);
+
+      this.logger.log(
+        `Planned summary prepared: runId=${savedRun.id}, userId=${userId}, channel=${channelUsernameWithAt}, items=${summaries.length}, toStore=${resultsToStore.length}`,
+      );
 
       if (resultsToStore.length) {
         await this.summaryChannelResultRepository.insert(resultsToStore);
@@ -285,9 +311,13 @@ export class SummaryChannelService {
         status: SummaryChannelRunStatus.Success,
         error: null,
       });
+
+      this.logger.log(
+        `Planned summary finished (success): runId=${savedRun.id}, userId=${userId}, channel=${channelUsernameWithAt}, posts=${posts.length}`,
+      );
     } catch (e: any) {
       this.logger.error(
-        `Planned summary failed for userId=${userId}, channel=${channelUsernameWithAt}`,
+        `Planned summary failed for userId=${userId}, channel=${channelUsernameWithAt}, runId=${savedRun?.id ?? 'unknown'}`,
         e,
       );
 
