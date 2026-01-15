@@ -209,7 +209,7 @@ export class CoreChannelUsersFlow {
 
   private async showPeriodSelectMenu(ctx: Context) {
     const text =
-      'Ядро пользователей сообщества\n\n' +
+      'Ядро пользователей сообщества 🏆\n\n' +
       'Выберите период, за который нужно сформировать отчёт:';
 
     const keyboard = buildCoreUsersPeriodKeyboard();

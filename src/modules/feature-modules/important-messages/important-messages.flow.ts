@@ -559,7 +559,7 @@ export class ImportantMessagesFlow {
       canDetach = channels.length > 0;
     }
 
-    const text = 'Важные сообщения — меню';
+    const text = 'Важные сообщения 🌟💬';
     const keyboard = buildImportantMessagesMenuKeyboard(canDetach);
 
     if ('callbackQuery' in ctx && ctx.callbackQuery) {

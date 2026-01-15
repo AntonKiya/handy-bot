@@ -4,7 +4,7 @@ import { buildMainMenuKeyboard } from './menu.keyboard';
 
 @Injectable()
 export class MenuService {
-  private readonly mainMenuText = 'Главное меню 🙋‍♂️';
+  private readonly mainMenuText = 'Добро пожаловать! Здесь 3 функции:';
 
   async showMainMenu(ctx: Context) {
     const keyboard = buildMainMenuKeyboard();
