@@ -25,6 +25,8 @@ export class CommandRouter {
 
     switch (command) {
       case '/start':
+        return this.menuService.showMainMenuWithInstructions(ctx);
+      case '/menu':
         return this.menuService.showMainMenu(ctx);
       default:
         return;
