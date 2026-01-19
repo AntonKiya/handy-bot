@@ -34,6 +34,13 @@ export class TelegramBotService implements OnModuleInit, OnApplicationShutdown {
 
     this.bot = new Telegraf<Context>(token);
 
+    this.bot.catch((err, ctx) => {
+      this.logger.error(
+        `[Telegraf] update failed (type=${ctx.updateType})`,
+        err as any,
+      );
+    });
+
     // Команды в нативном Menu
     await this.bot.telegram.setMyCommands([
       { command: 'start', description: 'Запустить бота' },
