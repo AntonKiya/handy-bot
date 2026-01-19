@@ -37,6 +37,7 @@ export class TelegramBotService implements OnModuleInit, OnApplicationShutdown {
     // Команды в нативном Menu
     await this.bot.telegram.setMyCommands([
       { command: 'start', description: 'Запустить бота' },
+      { command: 'menu', description: 'Главное меню' },
     ]);
 
     await this.bot.telegram.setChatMenuButton({
@@ -45,6 +46,7 @@ export class TelegramBotService implements OnModuleInit, OnApplicationShutdown {
 
     // Поддерживаемые команды
     this.bot.command('start', (ctx) => this.commandRouter.route(ctx));
+    this.bot.command('menu', (ctx) => this.commandRouter.route(ctx));
 
     // Централизованный текстовый обработчик
     this.bot.on('text', (ctx) => this.messageRouter.route(ctx));
